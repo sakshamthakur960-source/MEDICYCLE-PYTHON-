@@ -11,6 +11,7 @@ API_BASE = st.secrets.get(
     "MEDICYCLE_API_URL",
     os.getenv("MEDICYCLE_API_URL", "http://127.0.0.1:8000")
 ).rstrip("/")
+st.write("Configured API:", API_BASE)
 
 st.set_page_config(page_title='MediCycle', page_icon='♻️', layout='wide', initial_sidebar_state='expanded')
 
