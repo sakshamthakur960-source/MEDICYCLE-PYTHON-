@@ -63,17 +63,27 @@ def api(method: str, path: str, *, data=None, params=None, auth=True):
     if auth and token:
         headers['Authorization'] = f'Bearer {token}'
     try:
-        response = requests.request(method, f'{API_BASE}{path}', json=data, params=params, headers=headers, timeout=25)
+        response = requests.request(
+            method,
+            f'{API_BASE}{path}',
+            json=data,
+            params=params,
+            headers=headers,
+            timeout=25,
+        )
     except requests.RequestException as exc:
-        st.error(f'Cannot reach MediCycle API at {API_BASE}. Start the backend first. Details: {exc}')
+        st.error(f'Cannot reach MediCycle API at {API_BASE}. Details: {exc}')
         return None
+
     if response.status_code >= 400:
         st.error(f"HTTP {response.status_code}")
         st.write("Request URL:", response.url)
         st.code(response.text)
-    return None
+        return None
+
     if response.status_code == 204 or not response.content:
         return {}
+
     try:
         return response.json()
     except ValueError:
