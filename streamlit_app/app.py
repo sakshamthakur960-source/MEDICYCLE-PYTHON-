@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 from datetime import datetime
+from urllib import response
 import requests
 import streamlit as st
 import pandas as pd
@@ -67,12 +68,10 @@ def api(method: str, path: str, *, data=None, params=None, auth=True):
         st.error(f'Cannot reach MediCycle API at {API_BASE}. Start the backend first. Details: {exc}')
         return None
     if response.status_code >= 400:
-        try:
-            detail = response.json().get('detail', response.text)
-        except ValueError:
-            detail = response.text
-        st.error(f'{response.status_code}: {detail}')
-        return None
+        st.error(f"HTTP {response.status_code}")
+        st.write("Request URL:", response.url)
+        st.code(response.text)
+    return None
     if response.status_code == 204 or not response.content:
         return {}
     try:
