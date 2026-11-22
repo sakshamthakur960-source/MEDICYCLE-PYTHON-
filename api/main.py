@@ -43,31 +43,43 @@ def health():
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterIn, db: Session = Depends(get_db)):
-    user = User(
-        fullName=payload.fullName.strip(),
-        email=str(payload.email).lower() if payload.email else None,
-        phone=payload.phone,
-        passwordHash=hash_password(payload.password),
-        accountStatus="active",
-        emailVerified=False,
-        phoneVerified=False,
-    )
-    db.add(user)
-    db.flush()
-    wallet = Wallet(
-        userId=user.userId,
-        availableBalance=Decimal("0.00"),
-        walletStatus="active",
-        updatedAt=datetime.utcnow(),
-    )
-    db.add(wallet)
     try:
+        user = User(
+            fullName=payload.fullName.strip(),
+            email=str(payload.email).lower() if payload.email else None,
+            phone=payload.phone,
+            passwordHash=hash_password(payload.password),
+            accountStatus="active",
+            emailVerified=False,
+            phoneVerified=False,
+        )
+
+        db.add(user)
+        db.flush()
+
+        wallet = Wallet(
+            userId=user.userId,
+            availableBalance=Decimal("0.00"),
+            walletStatus="active",
+            updatedAt=datetime.utcnow(),
+        )
+
+        db.add(wallet)
         db.commit()
+        db.refresh(user)
+
+        return {
+            "user": UserOut.model_validate(user),
+            "accessToken": create_access_token(user.userId),
+            "tokenType": "bearer",
+        }
+
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="An account already exists with this email or phone")
-    db.refresh(user)
-    return {"user": UserOut.model_validate(user), "accessToken": create_access_token(user.userId), "tokenType": "bearer"}
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists with this email or phone",
+        )
 
 
 @app.post("/api/auth/login")
@@ -283,6 +295,8 @@ def redeem_reward(payload: RewardRedemptionIn, db: Session = Depends(get_db), us
     db.refresh(redemption)
     return {"redemption": redemption, "remainingBalance": wallet.availableBalance}
 
+
 # Operational APIs are kept in a separate router so the customer-facing API remains focused.
 from api.operations import router as operations_router
+
 app.include_router(operations_router)
