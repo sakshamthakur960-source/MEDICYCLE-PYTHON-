@@ -12,6 +12,7 @@ from models import (
     User, UserAddress, Medicine, MedicineBatch, UserMedicine, ReturnRequest,
     ReturnItem, PickupSlot, Wallet, WalletTransaction, Reward,
     RewardRedemption, DisposalCertificate, ReturnStatusHistory, Facility,
+    FacilityStaff, Driver,
 )
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
@@ -110,6 +111,98 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 @app.get("/api/users/me", response_model=UserOut)
 def get_profile(user: User = Depends(get_current_user)):
     return user
+
+
+@app.post("/api/wallet/claim-welcome-bonus")
+def claim_welcome_bonus(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # Exclude facility staff and drivers.
+    is_staff = db.scalar(
+        select(FacilityStaff.facilityStaffId)
+        .where(FacilityStaff.userId == user.userId)
+        .limit(1)
+    )
+
+    is_driver = db.scalar(
+        select(Driver.driverId)
+        .where(Driver.userId == user.userId)
+        .limit(1)
+    )
+
+    if is_staff or is_driver:
+        raise HTTPException(
+            status_code=403,
+            detail="Welcome bonus is available only to customer accounts",
+        )
+
+    try:
+        # Lock the wallet to prevent simultaneous duplicate claims.
+        wallet = db.scalar(
+            select(Wallet)
+            .where(Wallet.userId == user.userId)
+            .with_for_update()
+        )
+
+        if wallet is None:
+            wallet = Wallet(
+                userId=user.userId,
+                availableBalance=Decimal("0.00"),
+                walletStatus="active",
+                updatedAt=datetime.utcnow(),
+            )
+            db.add(wallet)
+            db.flush()
+
+        # Registration already records welcome transactions with WELCOME-.
+        existing_bonus = db.scalar(
+            select(WalletTransaction.transactionId)
+            .where(
+                WalletTransaction.walletId == wallet.walletId,
+                or_(
+                    WalletTransaction.referenceCode.like("WELCOME-%"),
+                    WalletTransaction.description.ilike("%welcome bonus%"),
+                ),
+            )
+            .limit(1)
+        )
+
+        if existing_bonus:
+            raise HTTPException(
+                status_code=409,
+                detail="Welcome bonus has already been credited",
+            )
+
+        bonus = Decimal("100.00")
+        wallet.availableBalance += bonus
+        wallet.updatedAt = datetime.utcnow()
+
+        db.add(
+            WalletTransaction(
+                walletId=wallet.walletId,
+                transactionType="CREDIT",
+                amount=bonus,
+                referenceCode=f"WELCOME-{uuid4().hex[:12].upper()}",
+                description="One-time 100 MediCredits customer welcome bonus",
+            )
+        )
+
+        db.commit()
+
+        return {
+            "message": "Welcome bonus credited successfully",
+            "creditedAmount": str(bonus),
+            "availableBalance": str(wallet.availableBalance),
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
 
 
 @app.patch("/api/users/me", response_model=UserOut)
