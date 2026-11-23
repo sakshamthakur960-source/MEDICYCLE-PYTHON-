@@ -57,14 +57,26 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
         db.add(user)
         db.flush()
 
+        # One-time customer welcome bonus: 100 MediCredits.
+        # The wallet and its CREDIT ledger entry are committed atomically.
+        welcome_bonus = Decimal("100.00")
         wallet = Wallet(
             userId=user.userId,
-            availableBalance=Decimal("0.00"),
+            availableBalance=welcome_bonus,
             walletStatus="active",
             updatedAt=datetime.utcnow(),
         )
 
         db.add(wallet)
+        db.flush()
+
+        db.add(WalletTransaction(
+            walletId=wallet.walletId,
+            transactionType="CREDIT",
+            amount=welcome_bonus,
+            referenceCode=f"WELCOME-{uuid4().hex[:12].upper()}",
+            description="One-time 100 MediCredits customer welcome bonus",
+        ))
         db.commit()
         db.refresh(user)
 

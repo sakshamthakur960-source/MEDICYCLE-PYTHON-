@@ -410,7 +410,7 @@ def driver_workspace():
     if assignments:
         amap = {f"{a.get('assignmentId')} — {a.get('status')}": a.get('assignmentId') for a in assignments}
         selected = st.selectbox('Update assignment', list(amap))
-        new_status = st.selectbox('New status', ['EN_ROUTE', 'ARRIVED', 'PICKED_UP'])
+        new_status = st.selectbox('New status', ['ACCEPTED', 'EN_ROUTE', 'ARRIVED', 'PICKED_UP'])
         if st.button('Update pickup status'):
             result = api('POST', f"/api/driver/assignments/{amap[selected]}/status", data={'status': new_status})
             if result: st.success('Assignment updated.')
