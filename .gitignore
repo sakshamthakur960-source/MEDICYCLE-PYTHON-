@@ -29,3 +29,6 @@ node_modules/
 dist/
 *.log
 
+
+medicycle_demo_credentials.txt
+medicycle_ops_test_credentials.txt
