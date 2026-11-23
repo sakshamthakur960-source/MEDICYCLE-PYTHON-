@@ -118,6 +118,13 @@ def claim_welcome_bonus(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Serialize claims for this account, including when its wallet does not yet exist.
+    db.scalar(
+        select(User)
+        .where(User.userId == user.userId)
+        .with_for_update()
+    )
+
     # Exclude facility staff and drivers.
     is_staff = db.scalar(
         select(FacilityStaff.facilityStaffId)
