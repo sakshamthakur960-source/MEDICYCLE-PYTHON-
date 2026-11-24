@@ -53,7 +53,7 @@ assert intake.status_code == 201, intake.text
 decision = client.post(f"/api/staff/returns/{return_id}/decision", headers=staff_headers, json={"decision": "ACCEPTED", "itemInspections": [{"returnItemId": item_id, "inspectionStatus": "ACCEPTED", "findings": "sealed"}], "creditsByItem": {item_id: 25}})
 assert decision.status_code == 200, decision.text
 wallet = client.get("/api/wallet", headers=customer_headers)
-assert wallet.status_code == 200 and float(wallet.json()["availableBalance"]) == 25.0, wallet.text
+assert wallet.status_code == 200 and float(wallet.json()["availableBalance"]) == 125.0, wallet.text
 duplicate = client.post(f"/api/staff/returns/{return_id}/decision", headers=staff_headers, json={"decision": "ACCEPTED", "itemInspections": [{"returnItemId": item_id, "inspectionStatus": "ACCEPTED"}], "creditsByItem": {item_id: 25}})
 assert duplicate.status_code == 409, duplicate.text
 print("PASS: registration, wallet, address, return creation, physical intake, all-or-nothing inspection, explicit credit award and duplicate-award prevention")

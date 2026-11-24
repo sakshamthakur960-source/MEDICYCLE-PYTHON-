@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -369,7 +369,8 @@ def wallet_summary(db: Session = Depends(get_db), user: User = Depends(get_curre
 @app.get("/api/rewards")
 def list_rewards(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     now = datetime.utcnow()
-    return db.scalars(select(Reward).where(Reward.status == "available", or_(Reward.validUntil.is_(None), Reward.validUntil >= now))).all()
+    # Case-insensitive status match: seed data stores 'AVAILABLE' and redeem_reward() already uses .lower().
+    return db.scalars(select(Reward).where(func.lower(Reward.status) == "available", or_(Reward.validUntil.is_(None), Reward.validUntil >= now)).order_by(Reward.creditsRequired)).all()
 
 
 @app.get("/api/wallet/transactions")
