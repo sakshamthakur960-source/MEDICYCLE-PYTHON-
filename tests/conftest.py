@@ -10,10 +10,15 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-os.environ.setdefault("DB_USER", "test")
-os.environ.setdefault("DB_PASSWORD", "test")
-os.environ.setdefault("DB_NAME", "medicycle")
-os.environ.setdefault("JWT_SECRET", "unit-test-secret-not-for-production-use-0123456789")
+# Assigned (not setdefault) so a developer's real .env / shell variables, e.g. the
+# TiDB host, can never be picked up by the test run. python-dotenv does not
+# override variables that are already set.
+os.environ["DB_USER"] = "test"
+os.environ["DB_PASSWORD"] = "test"
+os.environ["DB_HOST"] = "localhost"
+os.environ["DB_PORT"] = "3306"
+os.environ["DB_NAME"] = "medicycle"
+os.environ["JWT_SECRET"] = "unit-test-secret-not-for-production-use-0123456789"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

@@ -8,10 +8,18 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-API_BASE = st.secrets.get(
-    "MEDICYCLE_API_URL",
-    os.getenv("MEDICYCLE_API_URL", "http://127.0.0.1:8000")
-).rstrip("/")
+
+
+def _api_base() -> str:
+    """Streamlit secrets first (Streamlit Cloud), then the environment variable, then localhost."""
+    try:
+        configured = st.secrets.get("MEDICYCLE_API_URL")
+    except Exception:  # no secrets.toml, e.g. a local run: newer Streamlit raises instead of returning None
+        configured = None
+    return (configured or os.getenv("MEDICYCLE_API_URL", "http://127.0.0.1:8000")).rstrip("/")
+
+
+API_BASE = _api_base()
 
 st.set_page_config(page_title='MediCycle', page_icon='♻️', layout='wide', initial_sidebar_state='expanded')
 st.write("Configured API:", API_BASE)
@@ -57,6 +65,19 @@ input, textarea, [data-baseweb="select"] > div { border-radius:10px !important; 
 </style>""", unsafe_allow_html=True)
 
 # ---------------------------- API client ----------------------------
+def error_message(response) -> str:
+    """Return the API's human-readable error (FastAPI 'detail'), not the raw HTTP dump."""
+    try:
+        detail = response.json().get('detail')
+    except (ValueError, AttributeError):
+        detail = None
+    if isinstance(detail, list):  # FastAPI validation errors are a list of dicts
+        detail = '; '.join(str(d.get('msg', d)) if isinstance(d, dict) else str(d) for d in detail)
+    if detail:
+        return str(detail)
+    return f'The request could not be completed (HTTP {response.status_code}). Please try again.'
+
+
 def api(method: str, path: str, *, data=None, params=None, auth=True):
     headers = {}
     token = st.session_state.get('token')
@@ -76,9 +97,12 @@ def api(method: str, path: str, *, data=None, params=None, auth=True):
         return None
 
     if response.status_code >= 400:
-        st.error(f"HTTP {response.status_code}")
-        st.write("Request URL:", response.url)
-        st.code(response.text)
+        if response.status_code == 401 and auth and token:
+            # Access tokens expire (JWT_EXPIRE_MINUTES); send the user back to sign-in.
+            st.session_state.clear()
+            st.session_state['session_notice'] = 'Your session has expired. Please sign in again.'
+            st.rerun()
+        st.error(error_message(response))
         return None
 
     if response.status_code == 204 or not response.content:
@@ -234,8 +258,13 @@ def customer_returns():
 
 def customer_wallet():
     st.title('Wallet & rewards')
+    notice = st.session_state.pop('redeem_notice', None)
+    if notice:
+        st.success(notice)
     wallet = api('GET', '/api/wallet')
+    balance = None
     if wallet:
+        balance = float(wallet.get('availableBalance', 0) or 0)
         st.metric('Available MediCredits', wallet.get('availableBalance', 0))
     rewards = api('GET', '/api/rewards') or []
     st.subheader('Available rewards')
@@ -244,12 +273,21 @@ def customer_wallet():
             with st.container(border=True):
                 st.markdown(f"**{reward.get('title', 'Reward')}**")
                 st.write(reward.get('description') or '')
+                required = float(reward.get('creditsRequired') or 0)
                 st.caption(f"Partner: {reward.get('partnerName', '—')} · Credits required: {reward.get('creditsRequired', '—')}")
-                if st.button('Redeem reward', key=f"redeem_{reward.get('rewardId')}"):
+                # The API remains the authority on balance; this only avoids a pointless failing request.
+                short_by = required - balance if balance is not None else 0
+                if short_by > 0:
+                    st.caption(f"You need {short_by:g} more MediCredits for this reward.")
+                if st.button('Redeem reward', key=f"redeem_{reward.get('rewardId')}", disabled=short_by > 0):
                     result = api('POST', '/api/reward-redemptions', data={'rewardId': reward.get('rewardId')})
                     if result:
-                        st.success('Reward redeemed.')
-                        st.json(result)
+                        redemption = result.get('redemption', {}) if isinstance(result, dict) else {}
+                        st.session_state['redeem_notice'] = (
+                            f"Reward redeemed. Your code: {redemption.get('redemptionCode', '—')}. "
+                            f"Remaining MediCredits: {result.get('remainingBalance', '—')}."
+                        )
+                        st.rerun()  # reload so the balance and transaction list reflect the debit
     else:
         st.info('No rewards are currently available.')
     transactions = api('GET', '/api/wallet/transactions') or []
@@ -427,6 +465,9 @@ def driver_workspace():
 
 def main():
     if not st.session_state.get('token'):
+        notice = st.session_state.pop('session_notice', None)
+        if notice:
+            st.warning(notice)
         login_screen()
         return
     user = st.session_state.get('user') or {}
