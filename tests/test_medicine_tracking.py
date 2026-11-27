@@ -30,12 +30,19 @@ def test_expired_inventory_is_added_to_return_bucket_once(client, db):
     assert inventory.status_code == 200, inventory.text
     assert inventory.json()[0]["expiryStatus"] == "EXPIRED"
 
+    # Read endpoints must not create bucket records as a side effect.
+    assert client.get("/api/return-bucket", headers=headers).json() == []
+    sync = client.post("/api/return-bucket/sync", headers=headers)
+    assert sync.status_code == 200, sync.text
+    assert sync.json()["created"] == 1
+
     first_bucket = client.get("/api/return-bucket", headers=headers)
     second_bucket = client.get("/api/return-bucket", headers=headers)
     assert first_bucket.status_code == 200
     assert len(first_bucket.json()) == 1
     assert second_bucket.json() == first_bucket.json()
     assert first_bucket.json()[0]["quantity"] == 2
+    assert client.post("/api/return-bucket/sync", headers=headers).json()["created"] == 0
 
 
 def test_near_expiry_is_not_added_to_return_bucket(client, db):
