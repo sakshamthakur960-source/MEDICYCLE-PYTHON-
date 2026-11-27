@@ -394,24 +394,53 @@ def add_my_medicine(payload: MedicinePurchaseIn, db: Session = Depends(get_db), 
 
 @app.post("/api/my-medicines/demo")
 def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    if db.scalar(select(UserMedicine.userMedicineId).where(UserMedicine.userId == user.userId, UserMedicine.isDemo.is_(True))):
-        return {"created": 0, "message": "Demo medicines have already been loaded for this account"}
+    """Idempotently add six illustrative pharmacy-app purchases (three per app)."""
     catalogue = db.scalars(select(Medicine).order_by(Medicine.name).limit(3)).all()
-    if not catalogue:
-        raise HTTPException(status_code=409, detail="Medicine catalogue is empty. Load the catalogue first.")
+    if len(catalogue) < 3:
+        raise HTTPException(status_code=409, detail="At least three catalogue medicines are required for the pharmacy demo.")
+
     today = date.today()
-    examples = [(catalogue[0], "DEMO-EXPIRED-01", today-timedelta(days=20), "TATA_1MG"),
-                (catalogue[min(1,len(catalogue)-1)], "DEMO-SOON-01", today+timedelta(days=12), "PHARMEASY"),
-                (catalogue[min(2,len(catalogue)-1)], "DEMO-ACTIVE-01", today+timedelta(days=180), "TATA_1MG")]
-    for med, batch_no, expiry, source in examples:
-        batch = MedicineBatch(medicineId=med.medicineId, batchNumber=f"{user.userId}-{batch_no}", expiresOn=expiry)
-        db.add(batch); db.flush()
-        db.add(UserMedicine(userId=user.userId, medicineId=med.medicineId, batchId=batch.batchId,
-            quantity=1, packagingState="SEALED", sourcePlatform=source, externalOrderId=f"DEMO-{batch_no}",
-            purchaseDate=today-timedelta(days=60), isDemo=True, notes="Illustrative demo record"))
+    purchase_date = today - timedelta(days=60)
+    scenarios = (
+        ("EXPIRED", today - timedelta(days=20), "EXPIRED"),
+        ("NEAR", today + timedelta(days=12), "NEAR"),
+        ("ACTIVE", today + timedelta(days=180), "ACTIVE"),
+    )
+    apps = (("TATA_1MG", "TATA1MG"), ("PHARMEASY", "PHARMEASY"))
+    created = 0
+    for source, source_tag in apps:
+        for medicine, (status_tag, expiry, _) in zip(catalogue, scenarios):
+            order_id = f"MC-DEMO-{source_tag}-{status_tag}-2026"
+            exists = db.scalar(select(UserMedicine.userMedicineId).where(
+                UserMedicine.userId == user.userId,
+                UserMedicine.externalOrderId == order_id,
+                UserMedicine.isDemo.is_(True),
+            ))
+            if exists:
+                continue
+            batch_number = f"{user.userId}-MCDEMO-{source_tag}-{status_tag}"
+            batch = db.scalar(select(MedicineBatch).where(
+                MedicineBatch.medicineId == medicine.medicineId,
+                MedicineBatch.batchNumber == batch_number,
+            ))
+            if batch is None:
+                batch = MedicineBatch(medicineId=medicine.medicineId, batchNumber=batch_number, expiresOn=expiry)
+                db.add(batch)
+                db.flush()
+            elif batch.expiresOn != expiry:
+                raise HTTPException(status_code=409, detail=f"Demo batch {status_tag} has an unexpected expiry date.")
+            db.add(UserMedicine(
+                userId=user.userId, medicineId=medicine.medicineId, batchId=batch.batchId,
+                quantity=2 if status_tag == "EXPIRED" else 1,
+                packagingState="SEALED", sourcePlatform=source, externalOrderId=order_id,
+                purchaseDate=purchase_date, isDemo=True,
+                notes="Illustrative demo purchase; not a real pharmacy order",
+            ))
+            created += 1
+
     db.commit()
     _sync_expired_bucket(db, user)
-    return {"created": len(examples), "message": "Illustrative demo medicines loaded"}
+    return {"created": created, "message": "Illustrative purchases loaded for Tata 1mg and PharmEasy; expired items synchronized to Return Bucket."}
 
 
 @app.get("/api/return-bucket")
