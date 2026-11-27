@@ -263,56 +263,121 @@ def customer_wallet():
         st.success(notice)
 
     wallet = api('GET', '/api/wallet')
-    balance = None
-    if wallet:
-        balance = float(wallet.get('availableBalance', 0) or 0)
-        st.metric('Available MediCredits', wallet.get('availableBalance', 0))
-
+    balance = float(wallet.get('availableBalance', 0) or 0) if wallet else None
     transactions = api('GET', '/api/wallet/transactions') or []
     welcome_status = api('GET', '/api/wallet/welcome-bonus-status') or {}
     welcome_claimed = bool(welcome_status.get('claimed'))
 
-    st.subheader('Welcome coupon')
+    top_balance, top_activity = st.columns([1.25, 1], gap='large')
+    with top_balance:
+        with st.container(border=True):
+            st.caption('YOUR AVAILABLE BALANCE')
+            st.metric('MediCredits', wallet.get('availableBalance', '—') if wallet else '—')
+            st.progress(min(max((balance or 0) / 500, 0.0), 1.0), text='Progress towards 500 credits')
+    with top_activity:
+        with st.container(border=True):
+            st.caption('WALLET ACTIVITY')
+            credits_earned = sum(float(t.get('amount') or 0) for t in transactions if str(t.get('transactionType', '')).upper() == 'CREDIT')
+            credits_spent = sum(float(t.get('amount') or 0) for t in transactions if str(t.get('transactionType', '')).upper() == 'DEBIT')
+            earned_col, spent_col = st.columns(2)
+            earned_col.metric('Earned', f'{credits_earned:g}')
+            spent_col.metric('Redeemed', f'{credits_spent:g}')
+
+    st.subheader('Your welcome reward')
     with st.container(border=True):
-        st.markdown('### Welcome to MediCycle')
-        st.write('Claim your one-time welcome coupon and receive **100 MediCredits** in your wallet.')
-        if welcome_claimed:
-            st.info('Your 100 MediCredits welcome reward has already been credited.')
-        elif st.button('Claim 100 MediCredits', key='claim_welcome_bonus', type='primary'):
-            result = api('POST', '/api/wallet/claim-welcome-bonus')
-            if result:
-                st.session_state['redeem_notice'] = (
-                    f"Welcome coupon claimed: {result.get('creditedAmount', '100')} MediCredits added. "
-                    f"New balance: {result.get('availableBalance', '—')}."
-                )
-                st.rerun()
+        welcome_left, welcome_right = st.columns([3, 1], vertical_alignment='center')
+        with welcome_left:
+            st.markdown('### 🎁 100 MediCredits')
+            st.write('A one-time welcome reward for eligible customer accounts.')
+            st.caption('Credits are added to your wallet and recorded in your transaction history.')
+        with welcome_right:
+            if welcome_claimed:
+                st.success('Already claimed')
+            elif st.button('Claim reward', key='claim_welcome_bonus', type='primary', use_container_width=True):
+                result = api('POST', '/api/wallet/claim-welcome-bonus')
+                if result:
+                    st.session_state['redeem_notice'] = (
+                        f"Welcome reward claimed: {result.get('creditedAmount', '100')} MediCredits added. "
+                        f"New balance: {result.get('availableBalance', '—')}."
+                    )
+                    st.rerun()
 
     rewards = api('GET', '/api/rewards') or []
-    st.subheader('Available rewards')
-    if rewards:
-        for reward in rewards:
-            with st.container(border=True):
-                st.markdown(f"**{reward.get('title', 'Reward')}**")
-                st.write(reward.get('description') or '')
-                required = float(reward.get('creditsRequired') or 0)
-                st.caption(f"Partner: {reward.get('partnerName', '—')} · Credits required: {reward.get('creditsRequired', '—')}")
-                # The API remains the authority on balance; this only avoids a pointless failing request.
-                short_by = required - balance if balance is not None else 0
-                if short_by > 0:
-                    st.caption(f"You need {short_by:g} more MediCredits for this reward.")
-                if st.button('Redeem reward', key=f"redeem_{reward.get('rewardId')}", disabled=short_by > 0):
-                    result = api('POST', '/api/reward-redemptions', data={'rewardId': reward.get('rewardId')})
-                    if result:
-                        redemption = result.get('redemption', {}) if isinstance(result, dict) else {}
-                        st.session_state['redeem_notice'] = (
-                            f"Reward redeemed. Your code: {redemption.get('redemptionCode', '—')}. "
-                            f"Remaining MediCredits: {result.get('remainingBalance', '—')}."
-                        )
-                        st.rerun()  # reload so the balance and transaction list reflect the debit
-    else:
-        st.info('No rewards are currently available.')
-    records_table(transactions, 'Wallet transactions')
+    st.divider()
+    catalogue_tab, activity_tab = st.tabs(['🎁 Redeem rewards', '↗ Transaction activity'])
 
+    with catalogue_tab:
+        st.subheader('Reward catalogue')
+        if rewards:
+            search_col, sort_col = st.columns([2, 1])
+            search_term = search_col.text_input('Search rewards', placeholder='Search by reward or partner…', key='reward_search').strip().lower()
+            sort_by = sort_col.selectbox('Sort by', ['Credits: low to high', 'Credits: high to low', 'Partner name'], key='reward_sort')
+            filtered = [
+                reward for reward in rewards
+                if search_term in str(reward.get('title', '')).lower()
+                or search_term in str(reward.get('partnerName', '')).lower()
+                or search_term in str(reward.get('description', '')).lower()
+            ]
+            if sort_by == 'Credits: high to low':
+                filtered.sort(key=lambda item: float(item.get('creditsRequired') or 0), reverse=True)
+            elif sort_by == 'Partner name':
+                filtered.sort(key=lambda item: str(item.get('partnerName') or '').lower())
+            else:
+                filtered.sort(key=lambda item: float(item.get('creditsRequired') or 0))
+
+            st.caption(f'{len(filtered)} of {len(rewards)} rewards')
+            if filtered:
+                for reward in filtered:
+                    required = float(reward.get('creditsRequired') or 0)
+                    affordable = balance is not None and balance >= required
+                    with st.container(border=True):
+                        title_col, cost_col = st.columns([3, 1], vertical_alignment='center')
+                        with title_col:
+                            st.markdown(f"**{reward.get('title', 'Reward')}**")
+                            st.caption(f"Partner · {reward.get('partnerName', '—')}")
+                        with cost_col:
+                            st.metric('Cost', f'{required:g} MC')
+                        if reward.get('description'):
+                            st.write(reward.get('description'))
+                        if balance is None:
+                            st.warning('Wallet balance is unavailable. Refresh before redeeming.')
+                        elif not affordable:
+                            st.caption(f'You need {required - balance:g} more MediCredits.')
+                        if st.button(
+                            'Redeem reward',
+                            key=f"redeem_{reward.get('rewardId')}",
+                            disabled=not affordable,
+                            type='primary' if affordable else 'secondary',
+                            use_container_width=True,
+                        ):
+                            result = api('POST', '/api/reward-redemptions', data={'rewardId': reward.get('rewardId')})
+                            if result:
+                                redemption = result.get('redemption', {}) if isinstance(result, dict) else {}
+                                st.session_state['redeem_notice'] = (
+                                    f"Reward redeemed. Your code: {redemption.get('redemptionCode', '—')}. "
+                                    f"Remaining MediCredits: {result.get('remainingBalance', '—')}."
+                                )
+                                st.rerun()
+            else:
+                st.info('No rewards match that search. Try another name or partner.')
+        else:
+            st.info('No rewards are currently available. Check back later.')
+
+    with activity_tab:
+        st.subheader('Recent wallet activity')
+        if transactions:
+            for transaction in transactions:
+                tx_type = str(transaction.get('transactionType', '')).upper()
+                amount = float(transaction.get('amount') or 0)
+                icon = '＋' if tx_type == 'CREDIT' else '−'
+                label = 'Credits added' if tx_type == 'CREDIT' else 'Credits redeemed' if tx_type == 'DEBIT' else tx_type
+                with st.container(border=True):
+                    left, right = st.columns([3, 1], vertical_alignment='center')
+                    left.markdown(f"**{label}**")
+                    left.caption(transaction.get('description') or transaction.get('referenceCode') or 'Wallet transaction')
+                    right.metric('Amount', f"{icon}{amount:g} MC")
+        else:
+            st.info('Your wallet activity will appear here.')
 
 def customer_profile():
     st.title('Profile & addresses')
