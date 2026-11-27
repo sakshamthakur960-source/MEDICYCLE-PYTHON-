@@ -329,10 +329,22 @@ def _sync_expired_bucket(db: Session, user: User):
         except IntegrityError:
             continue
 
+@app.post("/api/return-bucket/sync")
+def sync_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Explicitly stage newly expired tracked medicines; safe to call repeatedly."""
+    before = set(db.scalars(
+        select(ReturnBucketItem.userMedicineId).where(ReturnBucketItem.userId == user.userId)
+    ).all())
+    _sync_expired_bucket(db, user)
+    after = set(db.scalars(
+        select(ReturnBucketItem.userMedicineId).where(ReturnBucketItem.userId == user.userId)
+    ).all())
+    db.commit()
+    return {"created": len(after - before), "message": "Expired medicines synchronized"}
+
+
 @app.get("/api/my-medicines")
 def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    _sync_expired_bucket(db, user)
-    db.commit()
     rows = db.execute(
         select(UserMedicine, Medicine, MedicineBatch)
         .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
@@ -404,8 +416,6 @@ def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_
 
 @app.get("/api/return-bucket")
 def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    _sync_expired_bucket(db, user)
-    db.commit()
     rows = db.execute(select(ReturnBucketItem, UserMedicine, Medicine, MedicineBatch)
         .join(UserMedicine, ReturnBucketItem.userMedicineId == UserMedicine.userMedicineId)
         .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
@@ -449,8 +459,11 @@ def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(ge
             .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
             .with_for_update()
         )
-        if slot is None or slot.slotStatus.lower() != "available" or slot.bookedCount >= slot.capacity:
+        if slot is None or slot.slotStatus.lower() != "available" or slot.bookedCount >= slot.capacity or slot.slotDate < date.today():
             raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
+        slot_facility = db.get(Facility, slot.facilityId)
+        if slot_facility is None or slot_facility.operatingStatus.lower() not in {"operational", "active"} or slot_facility.authorizationStatus.lower() not in {"approved", "authorized"}:
+            raise HTTPException(status_code=409, detail="Pickup slot facility is unavailable")
     else:
         facility = db.get(Facility, payload.facilityId)
         if facility is None or facility.operatingStatus.lower() not in {"operational", "active"} or facility.authorizationStatus.lower() not in {"approved", "authorized"}:
