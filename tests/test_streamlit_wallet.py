@@ -157,3 +157,17 @@ def test_wrong_password_shows_invalid_credentials_not_session_expired(client, db
     [b for b in at.button if "Sign in" in b.label][0].click().run()
     assert any("Invalid credentials" in e.value for e in at.error)
     assert not any("session has expired" in w.value for w in at.warning)
+
+
+def test_reward_search_filters_catalogue_interactively(client, db):
+    headers, _ = register(client)
+    make_reward(db, "Coffee voucher", credits="40.00")
+    make_reward(db, "Pharmacy discount", credits="60.00")
+    at = open_wallet(token_of(headers))
+
+    at.text_input[0].input("coffee").run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(redeem_buttons(at)) == 1
+    assert any("Coffee voucher" in m.value for m in at.markdown)
+    assert not any("Pharmacy discount" in m.value for m in at.markdown)
+
