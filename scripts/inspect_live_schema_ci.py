@@ -17,9 +17,9 @@ url=URL.create(
     host=os.environ["DB_HOST"],
     port=int(os.getenv("DB_PORT","4000")),
     database=os.environ["DB_NAME"],
-    query={"charset":"utf8mb4","ssl_mode":"VERIFY_IDENTITY"},
+    query={"charset":"utf8mb4"},
 )
-engine=create_engine(url,pool_pre_ping=True,connect_args={"connect_timeout":20})
+engine=create_engine(url,pool_pre_ping=True,connect_args={"connect_timeout":20,"ssl_verify_cert":True,"ssl_verify_identity":True})
 try:
     inspector=inspect(engine)
     tables=sorted(inspector.get_table_names())
