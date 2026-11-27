@@ -578,12 +578,23 @@ def main():
             cookie_manager.delete(AUTH_COOKIE_NAME, key="medicycle_delete_auth")
 
     if not st.session_state.get("token"):
-        saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
+        # Read the cookie from the incoming HTTP request, not only from the
+        # asynchronous CookieManager component. This avoids briefly rendering
+        # the login form before the component has hydrated after a refresh.
+        try:
+            request_cookies = st.context.cookies
+        except (AttributeError, RuntimeError):
+            request_cookies = {}
+        saved_token = request_cookies.get(AUTH_COOKIE_NAME)
+        if not saved_token:
+            saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
+
         if saved_token:
-            st.session_state["token"] = saved_token
-            profile = api("GET", "/api/users/me")
-            if profile:
-                st.session_state["user"] = profile
+            with st.spinner("Restoring your MediCycle session…"):
+                st.session_state["token"] = saved_token
+                profile = api("GET", "/api/users/me")
+                if profile:
+                    st.session_state["user"] = profile
 
     if not st.session_state.get('token'):
         notice = st.session_state.pop('session_notice', None)
