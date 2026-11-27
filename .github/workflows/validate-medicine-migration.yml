@@ -63,6 +63,15 @@ jobs:
                   WHERE TABLE_SCHEMA=:s AND TABLE_TYPE='BASE TABLE'
               """), {"s": schema}).scalars())
               report["table_count"] = len(tables)
+              preparer = engine.dialect.identifier_preparer
+              row_counts = {}
+              for table_name in sorted(tables):
+                  quoted = preparer.quote(table_name)
+                  row_counts[table_name] = int(conn.execute(
+                      text("SELECT COUNT(*) FROM " + quoted)
+                  ).scalar_one())
+              report["live_row_counts_by_table"] = row_counts
+              report["live_total_rows"] = sum(row_counts.values())
               report["returnBucketItem_exists"] = "returnBucketItem" in tables
               if not {"userMedicine", "returnBucketItem", "user", "returnRequest"}.issubset(tables):
                   problems.append("One or more required tables are missing")
