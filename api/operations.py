@@ -249,13 +249,18 @@ def update_assignment(assignment_id:UUID,payload:StatusUpdate,db:Session=Depends
     driver=db.scalar(select(Driver).where(Driver.userId==user.userId))
     row=db.get(PickupAssignment,assignment_id)
     if driver is None or row is None or row.driverId!=driver.driverId: raise HTTPException(404,"Assignment not found")
-    allowed={"ACCEPTED","EN_ROUTE","ARRIVED","PICKED_UP","COMPLETED","CANCELLED"}
-    if payload.status not in allowed: raise HTTPException(422,"Unsupported assignment status")
+    from api.workflows import allowed_assignment_transitions
+    allowed=allowed_assignment_transitions(row.status)
+    if payload.status not in allowed:
+        raise HTTPException(409, f"Invalid assignment transition from {row.status} to {payload.status}")
     row.status=payload.status
     if payload.status=="ACCEPTED": row.acceptedAt=datetime.utcnow()
     if payload.status in {"COMPLETED","CANCELLED"}: row.completedAt=datetime.utcnow()
     req=db.get(ReturnRequest,row.returnId); old=req.status
-    mapping={"PICKED_UP":"PICKED_UP","EN_ROUTE":"IN_TRANSIT","ARRIVED":"ARRIVED","COMPLETED":"IN_TRANSIT"}
+    # A completed pickup means the driver has finished collection, not that the
+    # facility has received the medicines. Keep the return at PICKED_UP until
+    # facility intake records physical receipt.
+    mapping={"PICKED_UP":"PICKED_UP","EN_ROUTE":"IN_TRANSIT","ARRIVED":"ARRIVED"}
     if payload.status in mapping and old!=mapping[payload.status]:
         req.status=mapping[payload.status]
         db.add(ReturnStatusHistory(returnId=req.returnId,previousStatus=old,newStatus=req.status,changedBy=user.userId,changeReason=payload.reason or "Driver status update"))
