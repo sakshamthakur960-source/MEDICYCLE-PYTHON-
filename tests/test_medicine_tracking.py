@@ -1,8 +1,7 @@
 from datetime import date, timedelta
-from uuid import UUID
 
 import models
-from conftest import register
+from tests.conftest import register
 
 
 def make_medicine(db, name="Test Paracetamol"):
