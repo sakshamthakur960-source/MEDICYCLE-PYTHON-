@@ -574,7 +574,8 @@ def main():
     # short-lived API token from a browser cookie and rehydrate the user profile.
     cookie_manager = stx.CookieManager(key="medicycle_auth_cookie_manager")
     if st.session_state.pop("_clear_auth_cookie", False):
-        cookie_manager.delete(AUTH_COOKIE_NAME, key="medicycle_delete_auth")
+        if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
+            cookie_manager.delete(AUTH_COOKIE_NAME, key="medicycle_delete_auth")
 
     if not st.session_state.get("token"):
         saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
@@ -596,7 +597,8 @@ def main():
         st.caption(f"Signed in as {user.get('fullName', 'User')}")
         page = st.radio('Workspace', ['Dashboard', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
         if st.button('Sign out', use_container_width=True):
-            cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
+            if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
+                cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
             st.session_state.clear(); refresh()
         st.divider()
         st.caption(f'API: {API_BASE}')
