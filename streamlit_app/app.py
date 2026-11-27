@@ -581,10 +581,14 @@ def main():
         # Read the cookie from the incoming HTTP request, not only from the
         # asynchronous CookieManager component. This avoids briefly rendering
         # the login form before the component has hydrated after a refresh.
-        try:
-            request_cookies = st.context.cookies
-        except (AttributeError, RuntimeError):
-            request_cookies = {}
+        request_cookies = {}
+        # Streamlit AppTest has no browser request context. Avoid reading
+        # st.context.cookies there; CookieManager remains the test-safe fallback.
+        if not os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                request_cookies = st.context.cookies
+            except (AttributeError, RuntimeError):
+                request_cookies = {}
         saved_token = request_cookies.get(AUTH_COOKIE_NAME)
         if not saved_token:
             saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
