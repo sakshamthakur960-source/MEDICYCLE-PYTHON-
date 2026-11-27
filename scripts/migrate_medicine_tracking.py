@@ -35,6 +35,11 @@ BUCKET_COLUMN_TYPES = {
     "createdAt": ("datetime", None, False),
     "submittedReturnId": ("char", 32, True),
 }
+PARENT_FOREIGN_KEYS = {
+    ("user", "userId"),
+    ("userMedicine", "userMedicineId"),
+    ("returnRequest", "returnId"),
+}
 
 
 def _type_matches(column_type, expected):
@@ -71,8 +76,11 @@ def validate_bucket_table(inspector):
     problems = []
     columns = {column["name"] for column in inspector.get_columns("returnBucketItem")}
     missing = BUCKET_COLUMNS - columns
+    unexpected = columns - BUCKET_COLUMNS
     if missing:
         problems.append("returnBucketItem missing columns: " + ", ".join(sorted(missing)))
+    if unexpected:
+        problems.append("returnBucketItem has unexpected columns: " + ", ".join(sorted(unexpected)))
     for column in inspector.get_columns("returnBucketItem"):
         name = column["name"]
         expected = BUCKET_COLUMN_TYPES.get(name)
