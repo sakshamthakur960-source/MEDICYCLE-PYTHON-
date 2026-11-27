@@ -77,6 +77,22 @@ class MedicinePurchaseIn(BaseModel):
     notes: str | None = None
 
 
+class ReturnBucketSubmitIn(BaseModel):
+    addressId: UUID | None = None
+    returnMethod: str = Field(pattern="^(DOORSTEP_PICKUP|PHARMACY_DROPOFF)$")
+    pickupSlotId: UUID | None = None
+    facilityId: UUID | None = None
+    requestNotes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_method_fields(self):
+        if self.returnMethod == "DOORSTEP_PICKUP" and self.pickupSlotId is None:
+            raise ValueError("A pickup slot is required for doorstep pickup")
+        if self.returnMethod == "PHARMACY_DROPOFF" and self.facilityId is None:
+            raise ValueError("A drop-off facility is required for pharmacy drop-off")
+        return self
+
+
 class ReturnItemIn(BaseModel):
     medicineId: UUID
     batchId: UUID | None = None
