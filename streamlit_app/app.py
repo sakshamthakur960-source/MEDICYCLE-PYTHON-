@@ -261,11 +261,32 @@ def customer_wallet():
     notice = st.session_state.pop('redeem_notice', None)
     if notice:
         st.success(notice)
+
     wallet = api('GET', '/api/wallet')
     balance = None
     if wallet:
         balance = float(wallet.get('availableBalance', 0) or 0)
         st.metric('Available MediCredits', wallet.get('availableBalance', 0))
+
+    transactions = api('GET', '/api/wallet/transactions') or []
+    welcome_status = api('GET', '/api/wallet/welcome-bonus-status') or {}
+    welcome_claimed = bool(welcome_status.get('claimed'))
+
+    st.subheader('Welcome coupon')
+    with st.container(border=True):
+        st.markdown('### Welcome to MediCycle')
+        st.write('Claim your one-time welcome coupon and receive **100 MediCredits** in your wallet.')
+        if welcome_claimed:
+            st.info('Your 100 MediCredits welcome reward has already been credited.')
+        elif st.button('Claim 100 MediCredits', key='claim_welcome_bonus', type='primary'):
+            result = api('POST', '/api/wallet/claim-welcome-bonus')
+            if result:
+                st.session_state['redeem_notice'] = (
+                    f"Welcome coupon claimed: {result.get('creditedAmount', '100')} MediCredits added. "
+                    f"New balance: {result.get('availableBalance', '—')}."
+                )
+                st.rerun()
+
     rewards = api('GET', '/api/rewards') or []
     st.subheader('Available rewards')
     if rewards:
@@ -290,7 +311,6 @@ def customer_wallet():
                         st.rerun()  # reload so the balance and transaction list reflect the debit
     else:
         st.info('No rewards are currently available.')
-    transactions = api('GET', '/api/wallet/transactions') or []
     records_table(transactions, 'Wallet transactions')
 
 

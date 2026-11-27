@@ -183,3 +183,62 @@ def test_transactions_endpoint_shows_debit(client, db):
     client.post("/api/reward-redemptions", json={"rewardId": str(reward.rewardId)}, headers=headers)
     tx = client.get("/api/wallet/transactions", headers=headers).json()
     assert {t["transactionType"] for t in tx} == {"CREDIT", "DEBIT"}
+
+
+def test_existing_customer_can_claim_welcome_bonus_once(client, db):
+    headers, _ = register(client)
+    # Registration already credited the welcome reward.
+    status = client.get("/api/wallet/welcome-bonus-status", headers=headers)
+    assert status.status_code == 200
+    assert status.json() == {"claimed": True}
+    duplicate = client.post("/api/wallet/claim-welcome-bonus", headers=headers)
+    assert duplicate.status_code == 409
+    wallet = db.scalar(select(models.Wallet))
+    assert wallet.availableBalance == Decimal("100.00")
+    assert ledger_balance(db, wallet.walletId) == Decimal("100.00")
+
+
+def test_legacy_customer_can_claim_welcome_bonus_once(client, db):
+    # Create a customer without using registration's automatic welcome bonus.
+    user = models.User(
+        fullName="Legacy Customer", email="legacy@example.com",
+        passwordHash="not-used", accountStatus="active",
+    )
+    db.add(user)
+    db.flush()
+    wallet = models.Wallet(
+        userId=user.userId, availableBalance=Decimal("0.00"),
+        walletStatus="active", updatedAt=datetime.utcnow(),
+    )
+    db.add(wallet)
+    db.commit()
+    from api.security import create_access_token
+    headers = {"Authorization": f"Bearer {create_access_token(user.userId)}"}
+
+    assert client.get("/api/wallet/welcome-bonus-status", headers=headers).json() == {"claimed": False}
+    claimed = client.post("/api/wallet/claim-welcome-bonus", headers=headers)
+    assert claimed.status_code == 200, claimed.text
+    assert Decimal(claimed.json()["creditedAmount"]) == Decimal("100.00")
+    assert Decimal(claimed.json()["availableBalance"]) == Decimal("100.00")
+    assert client.get("/api/wallet/welcome-bonus-status", headers=headers).json() == {"claimed": True}
+
+    duplicate = client.post("/api/wallet/claim-welcome-bonus", headers=headers)
+    assert duplicate.status_code == 409
+    db.refresh(wallet)
+    assert wallet.availableBalance == Decimal("100.00")
+    assert ledger_balance(db, wallet.walletId) == Decimal("100.00")
+
+
+def test_reward_catalogue_hides_seeded_demo_coupons(client, db):
+    headers, _ = register(client)
+    make_reward(db, "Demo Voucher - 100", credits="100.00")
+    demo_partner = models.Reward(
+        partnerName="Demo Partner", title="Demo Offer", description="seeded demo",
+        creditsRequired=Decimal("50.00"), status="AVAILABLE",
+    )
+    real_reward = make_reward(db, "Real Reward", credits="50.00")
+    db.add(demo_partner)
+    db.commit()
+    response = client.get("/api/rewards", headers=headers)
+    assert response.status_code == 200
+    assert {r["title"] for r in response.json()} == {"Real Reward"}
