@@ -292,7 +292,7 @@ def customer_wallet():
             st.caption('Credits are added to your wallet and recorded in your transaction history.')
         with welcome_right:
             if welcome_claimed:
-                st.success('Already claimed')
+                st.info('Already claimed')
             elif st.button('Claim reward', key='claim_welcome_bonus', type='primary', use_container_width=True):
                 result = api('POST', '/api/wallet/claim-welcome-bonus')
                 if result:
