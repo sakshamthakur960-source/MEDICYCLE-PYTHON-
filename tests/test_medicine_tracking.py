@@ -63,6 +63,8 @@ def test_near_expiry_is_not_added_to_return_bucket(client, db):
 
 
 def test_demo_medicines_are_per_customer_and_idempotent(client, db):
+    for name in ("Demo Medicine A", "Demo Medicine B", "Demo Medicine C"):
+        make_medicine(db, name)
     headers, _ = register(client, email="demo-medicines@example.com")
     first = client.post("/api/my-medicines/demo", headers=headers)
     second = client.post("/api/my-medicines/demo", headers=headers)
