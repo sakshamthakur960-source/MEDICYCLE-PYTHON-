@@ -296,6 +296,81 @@ def customer_my_medicines():
         else: st.success("Your Return Bucket is empty. Expired tracked medicines will appear here automatically.")
 
 
+
+def customer_medicine_apps():
+    st.title("Medicine Apps")
+    st.caption("Prototype workspace for recording medicine purchases from pharmacy apps.")
+    st.info("This is a MediCycle prototype: no pharmacy account is connected and no orders are imported. Add sample or manually recorded purchase details under the app they came from.")
+
+    catalogue = api("GET", "/api/medicines/catalogue", params={"limit": 500}) or []
+    options = {
+        f"{m.get('name')} {m.get('strength') or ''} — {m.get('dosageForm') or ''}": m.get("medicineId")
+        for m in catalogue
+    }
+    inventory = api("GET", "/api/my-medicines") or []
+
+    app_tabs = st.tabs(["Tata 1mg", "PharmEasy"])
+    apps = [
+        ("TATA_1MG", "Tata 1mg", "Record purchases you want to track from Tata 1mg."),
+        ("PHARMEASY", "PharmEasy", "Record purchases you want to track from PharmEasy."),
+    ]
+
+    for tab, (source_code, source_label, description) in zip(app_tabs, apps):
+        with tab:
+            st.subheader(source_label)
+            st.caption(description)
+            app_inventory = [x for x in inventory if x.get("sourcePlatform") == source_code]
+            total_qty = sum(int(x.get("quantity") or 0) for x in app_inventory)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Recorded purchases", len(app_inventory))
+            m2.metric("Total units", total_qty)
+            m3.metric("Expired", sum(x.get("expiryStatus") == "EXPIRED" for x in app_inventory))
+
+            with st.expander(f"Add {source_label} purchase", expanded=True):
+                with st.form(f"add_purchase_{source_code.lower()}"):
+                    choice = st.selectbox("Medicine", list(options), disabled=not options, key=f"medicine_{source_code.lower()}")
+                    batch_no = st.text_input("Batch number", key=f"batch_{source_code.lower()}")
+                    expiry = st.date_input("Expiry date", key=f"expiry_{source_code.lower()}")
+                    manufactured = st.date_input("Manufacturing date (optional)", value=None, key=f"manufactured_{source_code.lower()}")
+                    quantity = st.number_input("Quantity", min_value=1, max_value=10000, value=1, key=f"quantity_{source_code.lower()}")
+                    purchase = st.date_input("Purchase date", value=datetime.now().date(), key=f"purchase_{source_code.lower()}")
+                    order = st.text_input("Order ID (optional)", key=f"order_{source_code.lower()}")
+                    packaging = st.selectbox("Packaging state", ["SEALED", "INTACT", "OPENED", "DAMAGED", "UNKNOWN"], key=f"packaging_{source_code.lower()}")
+                    save = st.form_submit_button("Save purchase", type="primary", disabled=not options)
+                if save:
+                    if not options or not batch_no.strip():
+                        st.error("Select a catalogue medicine and enter its batch number.")
+                    else:
+                        result = api("POST", "/api/my-medicines", data={
+                            "medicineId": options[choice],
+                            "batchNumber": batch_no.strip(),
+                            "expiresOn": expiry.isoformat(),
+                            "manufacturedOn": manufactured.isoformat() if manufactured else None,
+                            "quantity": int(quantity),
+                            "purchaseDate": purchase.isoformat(),
+                            "sourcePlatform": source_code,
+                            "externalOrderId": order.strip() or None,
+                            "packagingState": packaging,
+                        })
+                        if result:
+                            st.success(f"Purchase saved under {source_label}.")
+                            st.rerun()
+
+            st.markdown(f"**Your {source_label} records**")
+            if app_inventory:
+                for item in app_inventory:
+                    with st.container(border=True):
+                        left, right = st.columns([3, 1])
+                        left.markdown(f"**{item.get('name')} {item.get('strength') or ''}**")
+                        left.caption(f"Order {item.get('externalOrderId') or '—'} · Batch {item.get('batchNumber') or '—'}")
+                        left.write(f"Quantity: {item.get('quantity')} · Purchase date: {item.get('purchaseDate') or '—'} · Expiry: {item.get('expiresOn') or 'Not recorded'}")
+                        if item.get("isDemo"):
+                            left.caption("Illustrative demo record")
+                        state = item.get("expiryStatus")
+                        right.metric("Status", state.replace("_", " ").title() if state else "Unknown")
+            else:
+                st.info(f"No {source_label} purchases have been recorded yet. Use the form above to add prototype data.")
+
 def customer_returns():
     st.title('Medicine returns')
     tab_new, tab_history = st.tabs(['Create return', 'Return history'])
@@ -682,7 +757,7 @@ def main():
     with st.sidebar:
         st.markdown('<div class="mc-brand"><div class="mc-mark" style="width:38px;height:38px;font-size:20px;border-radius:12px">♻</div><strong style="font-family:Manrope,sans-serif;font-size:1.25rem;color:#143b35">MediCycle</strong></div>', unsafe_allow_html=True)
         st.caption(f"Signed in as {user.get('fullName', 'User')}")
-        page = st.radio('Workspace', ['Dashboard', 'My Medicines', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
+        page = st.radio('Workspace', ['Dashboard', 'My Medicines', 'Medicine Apps', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
         if st.button('Sign out', use_container_width=True):
             if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
                 cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
@@ -691,6 +766,7 @@ def main():
         st.caption(f'API: {API_BASE}')
     if page == 'Dashboard': customer_dashboard()
     elif page == 'My Medicines': customer_my_medicines()
+    elif page == 'Medicine Apps': customer_medicine_apps()
     elif page == 'Returns': customer_returns()
     elif page == 'Wallet & rewards': customer_wallet()
     elif page == 'Profile & addresses': customer_profile()
