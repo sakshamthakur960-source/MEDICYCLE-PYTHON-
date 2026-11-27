@@ -25,6 +25,32 @@ jobs:
       - name: Install preflight dependencies
         run: python -m pip install "SQLAlchemy>=2.0,<3" "PyMySQL>=1.1,<2"
 
+      - name: Diagnose database network reachability (no credentials)
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          python - <<'PY'
+          import os, socket, sys
+          host = os.getenv("DB_HOST", "")
+          port = int(os.getenv("DB_PORT", "3306"))
+          if not host:
+              print("DB_HOST secret is empty")
+              sys.exit(2)
+          try:
+              addresses = sorted({item[4][0] for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
+              print(f"DNS_OK address_count={len(addresses)}")
+          except Exception as exc:
+              print(f"DNS_FAILED exception={type(exc).__name__}")
+              sys.exit(2)
+          try:
+              with socket.create_connection((host, port), timeout=8):
+                  print("TCP_OK database endpoint reachable from GitHub runner")
+          except Exception as exc:
+              print(f"TCP_FAILED exception={type(exc).__name__} errno={getattr(exc, 'errno', None)}")
+              sys.exit(3)
+          PY
+
       - name: Run read-only data integrity checks
         env:
           DB_USER: ${{ secrets.DB_USER }}
