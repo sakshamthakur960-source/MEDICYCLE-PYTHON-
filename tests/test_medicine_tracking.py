@@ -122,3 +122,48 @@ def test_return_bucket_items_can_be_submitted_independently(client, db):
     assert second_return.status_code == 201, second_return.text
     assert second_return.json()["submittedItems"] == 1
     assert client.get("/api/return-bucket", headers=headers).json() == []
+
+
+def test_purchase_rejects_invalid_date_order_and_future_dates(client, db):
+    headers, _ = register(client, email="invalid-purchase-dates@example.com")
+    medicine = make_medicine(db, "Invalid Date Medicine")
+    base = {
+        "medicineId": str(medicine.medicineId),
+        "batchNumber": "DATE-CHECK-1",
+        "expiresOn": (date.today() + timedelta(days=30)).isoformat(),
+        "quantity": 1,
+        "packagingState": "SEALED",
+        "sourcePlatform": "TATA_1MG",
+    }
+
+    future_purchase = client.post("/api/my-medicines", headers=headers, json={
+        **base, "purchaseDate": (date.today() + timedelta(days=1)).isoformat()
+    })
+    assert future_purchase.status_code == 422
+
+    manufactured_after_expiry = client.post("/api/my-medicines", headers=headers, json={
+        **base,
+        "manufacturedOn": (date.today() + timedelta(days=31)).isoformat(),
+        "purchaseDate": date.today().isoformat(),
+        "batchNumber": "DATE-CHECK-2",
+    })
+    assert manufactured_after_expiry.status_code == 422
+
+    blank_batch = client.post("/api/my-medicines", headers=headers, json={
+        **base, "batchNumber": "   "
+    })
+    assert blank_batch.status_code == 422
+
+
+def test_purchase_rejects_unknown_packaging_state(client, db):
+    headers, _ = register(client, email="invalid-packaging@example.com")
+    medicine = make_medicine(db, "Packaging Test Medicine")
+    response = client.post("/api/my-medicines", headers=headers, json={
+        "medicineId": str(medicine.medicineId),
+        "batchNumber": "PACKAGING-1",
+        "expiresOn": (date.today() + timedelta(days=30)).isoformat(),
+        "quantity": 1,
+        "packagingState": "BROKEN_BUT_UNKNOWN",
+        "sourcePlatform": "PHARMEASY",
+    })
+    assert response.status_code == 422
