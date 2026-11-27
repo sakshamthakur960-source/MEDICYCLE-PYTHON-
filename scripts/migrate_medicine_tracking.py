@@ -27,6 +27,14 @@ BUCKET_FOREIGN_KEYS = {
     ("userMedicineId", "userMedicine", "userMedicineId"),
     ("submittedReturnId", "returnRequest", "returnId"),
 }
+BUCKET_COLUMN_TYPES = {
+    "bucketItemId": ("char", 32, False),
+    "userId": ("char", 32, False),
+    "userMedicineId": ("char", 32, False),
+    "status": ("string", 40, False),
+    "createdAt": ("datetime", None, False),
+    "submittedReturnId": ("char", 32, True),
+}
 
 
 def _type_matches(column_type, expected):
@@ -65,6 +73,22 @@ def validate_bucket_table(inspector):
     missing = BUCKET_COLUMNS - columns
     if missing:
         problems.append("returnBucketItem missing columns: " + ", ".join(sorted(missing)))
+    for column in inspector.get_columns("returnBucketItem"):
+        name = column["name"]
+        expected = BUCKET_COLUMN_TYPES.get(name)
+        if expected is None:
+            continue
+        family, length, nullable = expected
+        actual_type = column["type"]
+        type_name = actual_type.__class__.__name__.lower()
+        if family == "char" and not (type_name in {"char", "varchar"} and actual_type.length == length):
+            problems.append(f"returnBucketItem.{name}: unexpected type {actual_type}")
+        elif family == "string" and not (isinstance(actual_type, String) and actual_type.length == length):
+            problems.append(f"returnBucketItem.{name}: unexpected type {actual_type}")
+        elif family == "datetime" and type_name != "datetime":
+            problems.append(f"returnBucketItem.{name}: unexpected type {actual_type}")
+        if column["nullable"] != nullable:
+            problems.append(f"returnBucketItem.{name}: nullable={column['nullable']}, expected {nullable}")
 
     pk = set(inspector.get_pk_constraint("returnBucketItem").get("constrained_columns") or [])
     if pk != {"bucketItemId"}:
