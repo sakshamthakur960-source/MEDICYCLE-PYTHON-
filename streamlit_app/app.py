@@ -311,6 +311,12 @@ def customer_medicine_apps():
     }
     inventory = api("GET", "/api/my-medicines") or []
 
+    if st.button("Load sample purchases for both apps", type="secondary", use_container_width=True):
+        result = api("POST", "/api/my-medicines/demo")
+        if result:
+            st.success(result.get("message", "Sample purchases loaded."))
+            st.rerun()
+
     app_tabs = st.tabs(["Tata 1mg", "PharmEasy"])
     apps = [
         ("TATA_1MG", "Tata 1mg", "Record purchases you want to track from Tata 1mg."),
@@ -319,7 +325,20 @@ def customer_medicine_apps():
 
     for tab, (source_code, source_label, description) in zip(app_tabs, apps):
         with tab:
-            st.subheader(source_label)
+            if source_code == "TATA_1MG":
+                st.markdown("""
+                <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid #f0d5d5;border-radius:16px;background:#fff;margin:4px 0 18px">
+                  <div style="width:62px;height:62px;border-radius:14px;background:#e53935;color:#fff;display:grid;place-items:center;font-size:22px;font-weight:900;letter-spacing:-1px">1mg</div>
+                  <div><div style="font-size:1.28rem;font-weight:800;color:#263238">Tata 1mg</div><div style="font-size:.82rem;color:#75838b">Medicine purchase source</div></div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid #e6dcf6;border-radius:16px;background:#fff;margin:4px 0 18px">
+                  <div style="width:62px;height:62px;border-radius:14px;background:#6039a5;color:#fff;display:grid;place-items:center;font-size:25px;font-weight:900">P<span style="color:#a8e35b">+</span></div>
+                  <div><div style="font-size:1.28rem;font-weight:800;color:#263238">PharmEasy</div><div style="font-size:.82rem;color:#75838b">Medicine purchase source</div></div>
+                </div>
+                """, unsafe_allow_html=True)
             st.caption(description)
             app_inventory = [x for x in inventory if x.get("sourcePlatform") == source_code]
             total_qty = sum(int(x.get("quantity") or 0) for x in app_inventory)
