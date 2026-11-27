@@ -277,7 +277,7 @@ def customer_wallet():
         st.markdown('### Welcome to MediCycle')
         st.write('Claim your one-time welcome coupon and receive **100 MediCredits** in your wallet.')
         if welcome_claimed:
-            st.success('Your 100 MediCredits welcome reward has already been credited.')
+            st.info('Your 100 MediCredits welcome reward has already been credited.')
         elif st.button('Claim 100 MediCredits', key='claim_welcome_bonus', type='primary'):
             result = api('POST', '/api/wallet/claim-welcome-bonus')
             if result:
