@@ -63,7 +63,7 @@ def test_near_expiry_is_not_added_to_return_bucket(client, db):
 
 
 def test_demo_medicines_are_per_customer_and_idempotent(client, db):
-    headers = auth_headers(client)
+    headers, _ = register(client, email="demo-medicines@example.com")
     first = client.post("/api/my-medicines/demo", headers=headers)
     second = client.post("/api/my-medicines/demo", headers=headers)
     assert first.status_code == 200, first.text
