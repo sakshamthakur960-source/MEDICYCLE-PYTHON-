@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -10,14 +10,14 @@ from sqlalchemy.orm import Session
 
 from models import (
     User, UserAddress, Medicine, MedicineBatch, UserMedicine, ReturnRequest,
-    ReturnItem, PickupSlot, Wallet, WalletTransaction, Reward,
+    ReturnItem, ReturnBucketItem, PickupSlot, Wallet, WalletTransaction, Reward,
     RewardRedemption, DisposalCertificate, ReturnStatusHistory, Facility,
     FacilityStaff, Driver,
 )
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
     RegisterIn, LoginIn, UserOut, AddressIn, MedicineOut, UserMedicineIn,
-    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn,
+    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn, MedicinePurchaseIn, ReturnBucketSubmitIn,
 )
 from api.security import hash_password, verify_password, create_access_token
 
@@ -309,6 +309,180 @@ def add_user_medicine(payload: UserMedicineIn, db: Session = Depends(get_db), us
     db.refresh(item)
     return item
 
+
+def _sync_expired_bucket(db: Session, user: User):
+    """Stage missing expired bucket rows; caller owns the transaction."""
+    today = date.today()
+    expired_ids = db.scalars(select(UserMedicine.userMedicineId).join(
+        MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId
+    ).where(UserMedicine.userId == user.userId, MedicineBatch.expiresOn < today)).all()
+    existing = set(db.scalars(select(ReturnBucketItem.userMedicineId).where(ReturnBucketItem.userId == user.userId)).all())
+    for inventory_id in expired_ids:
+        if inventory_id in existing:
+            continue
+        # Concurrent page loads can discover the same expired item. The unique
+        # constraint is the final guard; isolate a duplicate insert in a savepoint.
+        try:
+            with db.begin_nested():
+                db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory_id, status="IN_BUCKET"))
+                db.flush()
+        except IntegrityError:
+            continue
+
+@app.get("/api/my-medicines")
+def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    db.commit()
+    rows = db.execute(
+        select(UserMedicine, Medicine, MedicineBatch)
+        .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
+        .outerjoin(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
+        .where(UserMedicine.userId == user.userId).order_by(UserMedicine.addedAt.desc())
+    ).all()
+    today = date.today()
+    result = []
+    for inventory, medicine, batch in rows:
+        expiry = batch.expiresOn if batch else None
+        days = (expiry - today).days if expiry else None
+        state = "EXPIRED" if days is not None and days < 0 else "NEAR_EXPIRY" if days is not None and days <= 30 else "ACTIVE"
+        result.append({
+            "userMedicineId": str(inventory.userMedicineId), "medicineId": str(medicine.medicineId),
+            "name": medicine.name, "strength": medicine.strength, "dosageForm": medicine.dosageForm,
+            "quantity": inventory.quantity, "packagingState": inventory.packagingState,
+            "batchId": str(batch.batchId) if batch else None, "batchNumber": batch.batchNumber if batch else None,
+            "expiresOn": expiry.isoformat() if expiry else None, "daysToExpiry": days, "expiryStatus": state,
+            "sourcePlatform": inventory.sourcePlatform, "externalOrderId": inventory.externalOrderId,
+            "purchaseDate": inventory.purchaseDate.isoformat() if inventory.purchaseDate else None, "isDemo": inventory.isDemo
+        })
+    return result
+
+
+@app.post("/api/my-medicines", status_code=201)
+def add_my_medicine(payload: MedicinePurchaseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    medicine = db.get(Medicine, payload.medicineId)
+    if medicine is None:
+        raise HTTPException(status_code=404, detail="Medicine not found")
+    batch = db.scalar(select(MedicineBatch).where(MedicineBatch.medicineId == medicine.medicineId, MedicineBatch.batchNumber == payload.batchNumber))
+    if batch is None:
+        batch = MedicineBatch(medicineId=medicine.medicineId, batchNumber=payload.batchNumber,
+                              manufacturedOn=payload.manufacturedOn, expiresOn=payload.expiresOn)
+        db.add(batch)
+        db.flush()
+    elif batch.expiresOn != payload.expiresOn:
+        raise HTTPException(status_code=409, detail="This batch number already exists with a different expiry date")
+    inventory = UserMedicine(userId=user.userId, medicineId=medicine.medicineId, batchId=batch.batchId,
+        quantity=payload.quantity, packagingState=payload.packagingState, notes=payload.notes,
+        sourcePlatform=payload.sourcePlatform, externalOrderId=payload.externalOrderId,
+        purchaseDate=payload.purchaseDate, isDemo=False)
+    db.add(inventory)
+    db.commit()
+    db.refresh(inventory)
+    return {"userMedicineId": str(inventory.userMedicineId), "message": "Medicine added to your tracker"}
+
+
+@app.post("/api/my-medicines/demo")
+def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if db.scalar(select(UserMedicine.userMedicineId).where(UserMedicine.userId == user.userId, UserMedicine.isDemo.is_(True))):
+        return {"created": 0, "message": "Demo medicines have already been loaded for this account"}
+    catalogue = db.scalars(select(Medicine).order_by(Medicine.name).limit(3)).all()
+    if not catalogue:
+        raise HTTPException(status_code=409, detail="Medicine catalogue is empty. Load the catalogue first.")
+    today = date.today()
+    examples = [(catalogue[0], "DEMO-EXPIRED-01", today-timedelta(days=20), "TATA_1MG"),
+                (catalogue[min(1,len(catalogue)-1)], "DEMO-SOON-01", today+timedelta(days=12), "PHARMEASY"),
+                (catalogue[min(2,len(catalogue)-1)], "DEMO-ACTIVE-01", today+timedelta(days=180), "TATA_1MG")]
+    for med, batch_no, expiry, source in examples:
+        batch = MedicineBatch(medicineId=med.medicineId, batchNumber=f"{user.userId}-{batch_no}", expiresOn=expiry)
+        db.add(batch); db.flush()
+        db.add(UserMedicine(userId=user.userId, medicineId=med.medicineId, batchId=batch.batchId,
+            quantity=1, packagingState="SEALED", sourcePlatform=source, externalOrderId=f"DEMO-{batch_no}",
+            purchaseDate=today-timedelta(days=60), isDemo=True, notes="Illustrative demo record"))
+    db.commit()
+    _sync_expired_bucket(db, user)
+    return {"created": len(examples), "message": "Illustrative demo medicines loaded"}
+
+
+@app.get("/api/return-bucket")
+def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    db.commit()
+    rows = db.execute(select(ReturnBucketItem, UserMedicine, Medicine, MedicineBatch)
+        .join(UserMedicine, ReturnBucketItem.userMedicineId == UserMedicine.userMedicineId)
+        .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
+        .outerjoin(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
+        .where(ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET")
+        .order_by(ReturnBucketItem.createdAt)).all()
+    return [{"bucketItemId": str(b.bucketItemId), "userMedicineId": str(u.userMedicineId),
+             "medicineId": str(m.medicineId), "batchId": str(batch.batchId) if batch else None,
+             "name": m.name, "strength": m.strength, "quantity": u.quantity,
+             "expiresOn": batch.expiresOn.isoformat() if batch else None} for b,u,m,batch in rows]
+
+
+@app.post("/api/return-bucket/submit", status_code=201)
+def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    selected_ids = set(payload.bucketItemIds)
+    if len(selected_ids) != len(payload.bucketItemIds):
+        raise HTTPException(status_code=422, detail="Duplicate Return Bucket item IDs are not allowed")
+    bucket_rows = db.scalars(
+        select(ReturnBucketItem)
+        .where(
+            ReturnBucketItem.userId == user.userId,
+            ReturnBucketItem.status == "IN_BUCKET",
+            ReturnBucketItem.bucketItemId.in_(selected_ids),
+        )
+        .with_for_update()
+    ).all()
+    if len(bucket_rows) != len(selected_ids):
+        raise HTTPException(status_code=404, detail="One or more selected medicines are not in your active Return Bucket")
+    if payload.addressId is not None:
+        address = db.get(UserAddress, payload.addressId)
+        if address is None or address.userId != user.userId:
+            raise HTTPException(status_code=404, detail="Address not found for this user")
+    slot = None
+    if payload.returnMethod == "DOORSTEP_PICKUP":
+        if payload.addressId is None:
+            raise HTTPException(status_code=422, detail="A pickup address is required for doorstep pickup")
+        # Lock the slot row so simultaneous submissions cannot overbook it.
+        slot = db.scalar(
+            select(PickupSlot)
+            .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
+            .with_for_update()
+        )
+        if slot is None or slot.slotStatus.lower() != "available" or slot.bookedCount >= slot.capacity:
+            raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
+    else:
+        facility = db.get(Facility, payload.facilityId)
+        if facility is None or facility.operatingStatus.lower() not in {"operational", "active"} or facility.authorizationStatus.lower() not in {"approved", "authorized"}:
+            raise HTTPException(status_code=404, detail="Drop-off facility is unavailable")
+    inventory_rows = []
+    for bucket in bucket_rows:
+        inventory = db.get(UserMedicine, bucket.userMedicineId)
+        if inventory is None or inventory.userId != user.userId or inventory.batchId is None:
+            raise HTTPException(status_code=409, detail="A bucket medicine record is no longer valid")
+        batch = db.get(MedicineBatch, inventory.batchId)
+        if batch is None or batch.medicineId != inventory.medicineId or batch.expiresOn >= date.today():
+            raise HTTPException(status_code=409, detail="Only expired medicines can be submitted from the Return Bucket")
+        inventory_rows.append(inventory)
+    request = ReturnRequest(userId=user.userId, addressId=payload.addressId, returnMethod=payload.returnMethod, pickupSlotId=payload.pickupSlotId, facilityId=payload.facilityId, requestNotes=payload.requestNotes or "Submitted from My Medicines Return Bucket", status="SUBMITTED")
+    db.add(request)
+    db.flush()
+    for inventory in inventory_rows:
+        db.add(ReturnItem(returnId=request.returnId, medicineId=inventory.medicineId, batchId=inventory.batchId, quantity=inventory.quantity, packagingCondition=inventory.packagingState, inspectionStatus="PENDING", creditsAwarded=Decimal("0.00")))
+    if slot is not None:
+        slot.bookedCount += 1
+        if slot.bookedCount >= slot.capacity:
+            slot.slotStatus = "FULL"
+    db.add(ReturnStatusHistory(returnId=request.returnId, previousStatus=None, newStatus="SUBMITTED", changeReason="Customer submitted expired medicines from Return Bucket"))
+    for bucket in bucket_rows:
+        bucket.status = "SUBMITTED"
+        bucket.submittedReturnId = request.returnId
+    db.commit()
+    return {"returnId": str(request.returnId), "submittedItems": len(bucket_rows), "status": "SUBMITTED"}
+
+@app.get("/api/facilities")
+def list_customer_dropoff_facilities(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return db.scalars(select(Facility).where(func.lower(Facility.operatingStatus).in_(["operational", "active"]), func.lower(Facility.authorizationStatus).in_(["approved", "authorized"])).order_by(Facility.facilityName)).all()
 
 @app.get("/api/pickup-slots")
 def list_pickup_slots(facility_id: UUID | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
