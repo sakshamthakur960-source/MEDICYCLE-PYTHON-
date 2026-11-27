@@ -37,9 +37,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
 
+      - name: Validate required database secrets
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          required = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"]
+          missing = [key for key in required if not os.getenv(key)]
+          if missing:
+              print("Missing or empty GitHub Actions secrets: " + ", ".join(missing))
+              sys.exit(1)
+          print("All five database secrets are present.")
+          PY
+
       - name: Preview demo rewards (read-only)
         if: inputs.mode == 'preview'
         env:
+          PYTHONPATH: .
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -50,6 +69,7 @@ jobs:
       - name: Apply demo reward cleanup
         if: inputs.mode == 'apply'
         env:
+          PYTHONPATH: .
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           DB_USER: ${{ secrets.DB_USER }}
