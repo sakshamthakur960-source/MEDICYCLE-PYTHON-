@@ -822,6 +822,13 @@ def main():
             st.session_state.clear(); refresh()
         st.divider()
         st.caption(f'API: {API_BASE}')
+    st.markdown(
+        '<div class="mc-page-intro"><div><small>MEDICYCLE WORKSPACE</small>'
+        '<strong>Care, collected responsibly.</strong>'
+        '<span>Your medicine returns and reverse-logistics workspace</span></div>'
+        '<span>♻ &nbsp; Responsible returns</span></div>',
+        unsafe_allow_html=True,
+    )
     if page == 'Dashboard': customer_dashboard()
     elif page == 'My Medicines': customer_my_medicines()
     elif page == 'Medicine Apps': customer_medicine_apps()
