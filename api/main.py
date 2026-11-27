@@ -311,17 +311,16 @@ def add_user_medicine(payload: UserMedicineIn, db: Session = Depends(get_db), us
 
 
 def _sync_expired_bucket(db: Session, user: User):
+    """Stage missing expired bucket rows; caller owns the transaction."""
     today = date.today()
-    rows = db.execute(
-        select(UserMedicine, MedicineBatch).join(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
-        .where(UserMedicine.userId == user.userId, MedicineBatch.expiresOn < today)
-    ).all()
-    for inventory, batch in rows:
-        exists = db.scalar(select(ReturnBucketItem.bucketItemId).where(ReturnBucketItem.userMedicineId == inventory.userMedicineId))
-        if not exists:
-            db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory.userMedicineId, status="IN_BUCKET"))
-    db.commit()
-
+    expired_ids = db.scalars(select(UserMedicine.userMedicineId).join(
+        MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId
+    ).where(UserMedicine.userId == user.userId, MedicineBatch.expiresOn < today)).all()
+    existing = set(db.scalars(select(ReturnBucketItem.userMedicineId).where(ReturnBucketItem.userId == user.userId)).all())
+    for inventory_id in expired_ids:
+        if inventory_id not in existing:
+            db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory_id, status="IN_BUCKET"))
+    db.flush()
 
 @app.get("/api/my-medicines")
 def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -413,35 +412,52 @@ def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_c
 @app.post("/api/return-bucket/submit", status_code=201)
 def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     _sync_expired_bucket(db, user)
-    bucket_rows = db.scalars(select(ReturnBucketItem).where(
-        ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET"
-    ).with_for_update()).all()
+    bucket_rows = db.scalars(select(ReturnBucketItem).where(ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET").with_for_update()).all()
     if not bucket_rows:
         raise HTTPException(status_code=409, detail="Your Return Bucket is empty")
+    if payload.addressId is not None:
+        address = db.get(UserAddress, payload.addressId)
+        if address is None or address.userId != user.userId:
+            raise HTTPException(status_code=404, detail="Address not found for this user")
+    slot = None
+    if payload.returnMethod == "DOORSTEP_PICKUP":
+        if payload.addressId is None:
+            raise HTTPException(status_code=422, detail="A pickup address is required for doorstep pickup")
+        slot = db.get(PickupSlot, payload.pickupSlotId)
+        if slot is None or slot.slotStatus.lower() != "available" or slot.bookedCount >= slot.capacity:
+            raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
+    else:
+        facility = db.get(Facility, payload.facilityId)
+        if facility is None or facility.operatingStatus.lower() not in {"operational", "active"} or facility.authorizationStatus.lower() not in {"approved", "authorized"}:
+            raise HTTPException(status_code=404, detail="Drop-off facility is unavailable")
     inventory_rows = []
     for bucket in bucket_rows:
         inventory = db.get(UserMedicine, bucket.userMedicineId)
         if inventory is None or inventory.userId != user.userId or inventory.batchId is None:
             raise HTTPException(status_code=409, detail="A bucket medicine record is no longer valid")
         batch = db.get(MedicineBatch, inventory.batchId)
-        if batch is None or batch.expiresOn >= date.today():
+        if batch is None or batch.medicineId != inventory.medicineId or batch.expiresOn >= date.today():
             raise HTTPException(status_code=409, detail="Only expired medicines can be submitted from the Return Bucket")
         inventory_rows.append(inventory)
-    create_payload = ReturnCreateIn(
-        addressId=payload.addressId, returnMethod=payload.returnMethod,
-        pickupSlotId=payload.pickupSlotId, facilityId=payload.facilityId,
-        requestNotes=payload.requestNotes or "Submitted from My Medicines Return Bucket",
-        items=[{"medicineId": x.medicineId, "batchId": x.batchId, "quantity": x.quantity,
-                "packagingCondition": x.packagingState} for x in inventory_rows]
-    )
-    result = create_return(create_payload, db, user)
-    return_id = result["return"].returnId
+    request = ReturnRequest(userId=user.userId, addressId=payload.addressId, returnMethod=payload.returnMethod, pickupSlotId=payload.pickupSlotId, facilityId=payload.facilityId, requestNotes=payload.requestNotes or "Submitted from My Medicines Return Bucket", status="SUBMITTED")
+    db.add(request)
+    db.flush()
+    for inventory in inventory_rows:
+        db.add(ReturnItem(returnId=request.returnId, medicineId=inventory.medicineId, batchId=inventory.batchId, quantity=inventory.quantity, packagingCondition=inventory.packagingState, inspectionStatus="PENDING", creditsAwarded=Decimal("0.00")))
+    if slot is not None:
+        slot.bookedCount += 1
+        if slot.bookedCount >= slot.capacity:
+            slot.slotStatus = "FULL"
+    db.add(ReturnStatusHistory(returnId=request.returnId, previousStatus=None, newStatus="SUBMITTED", changeReason="Customer submitted expired medicines from Return Bucket"))
     for bucket in bucket_rows:
         bucket.status = "SUBMITTED"
-        bucket.submittedReturnId = return_id
+        bucket.submittedReturnId = request.returnId
     db.commit()
-    return {"returnId": str(return_id), "submittedItems": len(bucket_rows), "status": "SUBMITTED"}
+    return {"returnId": str(request.returnId), "submittedItems": len(bucket_rows), "status": "SUBMITTED"}
 
+@app.get("/api/facilities")
+def list_customer_dropoff_facilities(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return db.scalars(select(Facility).where(func.lower(Facility.operatingStatus).in_(["operational", "active"]), func.lower(Facility.authorizationStatus).in_(["approved", "authorized"])).order_by(Facility.facilityName)).all()
 
 @app.get("/api/pickup-slots")
 def list_pickup_slots(facility_id: UUID | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
