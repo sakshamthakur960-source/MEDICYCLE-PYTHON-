@@ -43,8 +43,8 @@ jobs:
           if missing:
               raise SystemExit("Missing database secrets: " + ", ".join(missing))
           url = URL.create("mysql+pymysql", username=os.environ["DB_USER"],
-              password=os.environ["DB_PASSWORD"], host=os.environ["DB_HOST"],
-              port=int(os.environ["DB_PORT"]), database=os.environ["DB_NAME"],
+              password=os.environ["DB_PASSWORD"], host=os.environ["DB_HOST"].strip(),
+              port=int(os.environ["DB_PORT"].strip()), database=os.environ["DB_NAME"].strip(),
               query={"charset":"utf8mb4"})
           engine = create_engine(url, pool_pre_ping=True)
           schema = os.environ["DB_NAME"]
@@ -145,4 +145,4 @@ jobs:
           PYTHONPATH: .
         run: |
           pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
-          python scripts/preflight_live_data.py
+          python -c 'import os,runpy; [os.environ.__setitem__(k,os.environ[k].strip()) for k in ("DB_HOST","DB_PORT","DB_USER","DB_NAME")]; runpy.run_path("scripts/preflight_live_data.py",run_name="__main__")'
