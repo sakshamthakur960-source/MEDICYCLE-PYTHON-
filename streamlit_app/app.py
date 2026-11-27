@@ -217,6 +217,63 @@ def customer_dashboard():
     st.info('Credits are added only after the facility physically receives and verifies an entire return request.')
 
 
+def customer_my_medicines():
+    st.title("My Medicines")
+    st.caption("Track medicines purchased from pharmacy apps. Add details from your order or medicine packaging.")
+    st.info("Tata 1mg and PharmEasy are source labels only; MediCycle does not currently import live order history. Near-expiry means 30 days or less. Expired means the expiry date is before today.")
+    inventory = api("GET", "/api/my-medicines") or []
+    bucket = api("GET", "/api/return-bucket") or []
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Tracked",len(inventory))
+    c2.metric("Near expiry",sum(x.get("expiryStatus")=="NEAR_EXPIRY" for x in inventory))
+    c3.metric("Expired",sum(x.get("expiryStatus")=="EXPIRED" for x in inventory))
+    c4.metric("Return bucket",len(bucket))
+    tab_inventory,tab_add,tab_bucket=st.tabs(["Inventory","Add purchase","Return bucket"])
+    with tab_inventory:
+        if inventory:
+            for item in inventory:
+                with st.container(border=True):
+                    left,right=st.columns([3,1])
+                    left.markdown(f"**{item.get('name')} {item.get('strength') or ''}**")
+                    left.caption(f"{item.get('sourcePlatform') or 'Manually added'} · Order {item.get('externalOrderId') or '—'} · Batch {item.get('batchNumber') or '—'}")
+                    left.write(f"Quantity: {item.get('quantity')} · Expiry: {item.get('expiresOn') or 'Not recorded'}")
+                    if item.get("isDemo"): left.caption("Illustrative demo record")
+                    state=item.get("expiryStatus")
+                    right.metric("Status",state.replace("_"," ").title() if state else "Unknown")
+        else: st.info("No medicines tracked yet. Add a purchase or load illustrative demo records.")
+        if st.button("Load demo medicines",type="secondary"):
+            result=api("POST","/api/my-medicines/demo")
+            if result: st.success(result.get("message","Demo records loaded")); st.rerun()
+    with tab_add:
+        catalogue=api("GET","/api/medicines/catalogue",params={"limit":500}) or []
+        options={f"{m.get('name')} {m.get('strength') or ''} — {m.get('dosageForm') or ''}":m.get("medicineId") for m in catalogue}
+        with st.form("add_tracked_medicine"):
+            source=st.selectbox("Purchased from",["TATA_1MG","PHARMEASY"],format_func=lambda x:"Tata 1mg" if x=="TATA_1MG" else "PharmEasy")
+            choice=st.selectbox("Medicine",list(options),disabled=not options)
+            batch_no=st.text_input("Batch number")
+            expiry=st.date_input("Expiry date")
+            manufactured=st.date_input("Manufacturing date (optional)",value=None)
+            quantity=st.number_input("Quantity",min_value=1,max_value=10000,value=1)
+            purchase=st.date_input("Purchase date",value=datetime.now().date())
+            order=st.text_input("Order ID (optional)")
+            packaging=st.selectbox("Packaging state",["SEALED","INTACT","OPENED","DAMAGED","UNKNOWN"])
+            save=st.form_submit_button("Add to My Medicines",type="primary")
+        if save:
+            if not options or not batch_no.strip(): st.error("Select a catalogue medicine and enter its batch number.")
+            else:
+                result=api("POST","/api/my-medicines",data={"medicineId":options[choice],"batchNumber":batch_no.strip(),"expiresOn":expiry.isoformat(),"manufacturedOn":manufactured.isoformat() if manufactured else None,"quantity":int(quantity),"purchaseDate":purchase.isoformat(),"sourcePlatform":source,"externalOrderId":order or None,"packagingState":packaging})
+                if result: st.success("Medicine added to your tracker."); st.rerun()
+    with tab_bucket:
+        st.subheader("Expired medicines ready for return")
+        if bucket:
+            st.warning("These expired medicines were added automatically. Review them before submitting a return.")
+            records_table(bucket)
+            if st.button("Continue to Returns",type="primary"):
+                st.session_state["page_to_open"]="Returns"
+                st.rerun()
+        else: st.success("Your Return Bucket is empty. Expired tracked medicines will appear here automatically.")
+
+
 def customer_returns():
     st.title('Medicine returns')
     tab_new, tab_history = st.tabs(['Create return', 'Return history'])
@@ -603,7 +660,7 @@ def main():
     with st.sidebar:
         st.markdown('<div class="mc-brand"><div class="mc-mark" style="width:38px;height:38px;font-size:20px;border-radius:12px">♻</div><strong style="font-family:Manrope,sans-serif;font-size:1.25rem;color:#143b35">MediCycle</strong></div>', unsafe_allow_html=True)
         st.caption(f"Signed in as {user.get('fullName', 'User')}")
-        page = st.radio('Workspace', ['Dashboard', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
+        page = st.radio('Workspace', ['Dashboard', 'My Medicines', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
         if st.button('Sign out', use_container_width=True):
             if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
                 cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
@@ -611,6 +668,7 @@ def main():
         st.divider()
         st.caption(f'API: {API_BASE}')
     if page == 'Dashboard': customer_dashboard()
+    elif page == 'My Medicines': customer_my_medicines()
     elif page == 'Returns': customer_returns()
     elif page == 'Wallet & rewards': customer_wallet()
     elif page == 'Profile & addresses': customer_profile()
