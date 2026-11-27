@@ -145,8 +145,19 @@ def main():
                 ) else "PASS",
             }
     except (SQLAlchemyError, RuntimeError, ValueError) as exc:
-        # Error text is intentionally not serialized; drivers can include connection details.
-        report["error"] = f"{type(exc).__name__}: preflight could not complete; inspect secured runner logs."
+        # Keep diagnostics useful without exposing connection strings, hostnames, or credentials.
+        diagnostic = {"exception_type": type(exc).__name__}
+        if isinstance(exc, RuntimeError):
+            diagnostic["reason"] = str(exc)  # contains only missing environment-variable names
+        elif isinstance(exc, ValueError):
+            diagnostic["reason"] = "Invalid database configuration value (for example DB_PORT)."
+        elif isinstance(exc, SQLAlchemyError):
+            original = getattr(exc, "orig", None)
+            args = getattr(original, "args", ()) if original is not None else ()
+            if args and isinstance(args[0], int):
+                diagnostic["driver_error_code"] = args[0]
+            diagnostic["reason"] = "Database connection or read query failed; details intentionally redacted."
+        report["error"] = diagnostic
         report["summary"] = {"result": "ERROR"}
         failures += 1
     finally:
