@@ -95,6 +95,9 @@ def test_return_bucket_items_can_be_submitted_independently(client, db):
         })
         assert response.status_code == 201, response.text
 
+    sync = client.post("/api/return-bucket/sync", headers=headers)
+    assert sync.status_code == 200, sync.text
+    assert sync.json()["created"] == 2
     bucket = client.get("/api/return-bucket", headers=headers).json()
     assert len(bucket) == 2
 
