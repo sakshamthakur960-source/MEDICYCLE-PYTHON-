@@ -22,7 +22,7 @@ def test_expired_inventory_is_added_to_return_bucket_once(client, db):
         "quantity": 2,
         "packagingState": "SEALED",
         "sourcePlatform": "TATA_1MG",
-        "purchaseDate": date.today().isoformat(),
+        "purchaseDate": (date.today() - timedelta(days=30)).isoformat(),
     })
     assert response.status_code == 201, response.text
 
