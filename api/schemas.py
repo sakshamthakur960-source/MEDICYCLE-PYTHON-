@@ -64,6 +64,51 @@ class UserMedicineIn(BaseModel):
     notes: str | None = None
 
 
+class MedicinePurchaseIn(BaseModel):
+    medicineId: UUID
+    batchNumber: str = Field(min_length=1, max_length=255)
+    expiresOn: date
+    manufacturedOn: date | None = None
+    quantity: int = Field(gt=0)
+    packagingState: str = Field(default="SEALED", pattern="^(SEALED|INTACT|OPENED|DAMAGED|UNKNOWN)$")
+    sourcePlatform: str = Field(pattern="^(TATA_1MG|PHARMEASY)$")
+    externalOrderId: str | None = Field(default=None, max_length=255)
+    purchaseDate: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_purchase_dates(self):
+        self.batchNumber = self.batchNumber.strip()
+        if not self.batchNumber:
+            raise ValueError("Batch number cannot be blank")
+        if self.manufacturedOn and self.manufacturedOn > self.expiresOn:
+            raise ValueError("Manufacturing date cannot be after the expiry date")
+        if self.manufacturedOn and self.purchaseDate and self.manufacturedOn > self.purchaseDate:
+            raise ValueError("Purchase date cannot be before the manufacturing date")
+        if self.purchaseDate and self.purchaseDate > date.today():
+            raise ValueError("Purchase date cannot be in the future")
+        if self.purchaseDate and self.purchaseDate > self.expiresOn:
+            raise ValueError("Purchase date cannot be after the expiry date")
+        return self
+
+
+class ReturnBucketSubmitIn(BaseModel):
+    bucketItemIds: list[UUID] = Field(min_length=1)
+    addressId: UUID | None = None
+    returnMethod: str = Field(pattern="^(DOORSTEP_PICKUP|PHARMACY_DROPOFF)$")
+    pickupSlotId: UUID | None = None
+    facilityId: UUID | None = None
+    requestNotes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_method_fields(self):
+        if self.returnMethod == "DOORSTEP_PICKUP" and self.pickupSlotId is None:
+            raise ValueError("A pickup slot is required for doorstep pickup")
+        if self.returnMethod == "PHARMACY_DROPOFF" and self.facilityId is None:
+            raise ValueError("A drop-off facility is required for pharmacy drop-off")
+        return self
+
+
 class ReturnItemIn(BaseModel):
     medicineId: UUID
     batchId: UUID | None = None
