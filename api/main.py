@@ -318,9 +318,16 @@ def _sync_expired_bucket(db: Session, user: User):
     ).where(UserMedicine.userId == user.userId, MedicineBatch.expiresOn < today)).all()
     existing = set(db.scalars(select(ReturnBucketItem.userMedicineId).where(ReturnBucketItem.userId == user.userId)).all())
     for inventory_id in expired_ids:
-        if inventory_id not in existing:
-            db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory_id, status="IN_BUCKET"))
-    db.flush()
+        if inventory_id in existing:
+            continue
+        # Concurrent page loads can discover the same expired item. The unique
+        # constraint is the final guard; isolate a duplicate insert in a savepoint.
+        try:
+            with db.begin_nested():
+                db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory_id, status="IN_BUCKET"))
+                db.flush()
+        except IntegrityError:
+            continue
 
 @app.get("/api/my-medicines")
 def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -436,7 +443,12 @@ def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(ge
     if payload.returnMethod == "DOORSTEP_PICKUP":
         if payload.addressId is None:
             raise HTTPException(status_code=422, detail="A pickup address is required for doorstep pickup")
-        slot = db.get(PickupSlot, payload.pickupSlotId)
+        # Lock the slot row so simultaneous submissions cannot overbook it.
+        slot = db.scalar(
+            select(PickupSlot)
+            .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
+            .with_for_update()
+        )
         if slot is None or slot.slotStatus.lower() != "available" or slot.bookedCount >= slot.capacity:
             raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
     else:
