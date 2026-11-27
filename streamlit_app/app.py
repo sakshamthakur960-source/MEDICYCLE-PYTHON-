@@ -272,6 +272,12 @@ def customer_my_medicines():
             facilities=api("GET","/api/facilities") or []
             slots=api("GET","/api/pickup-slots") or []
             with st.form("submit_expired_bucket"):
+                st.markdown("**Choose which expired medicines to return now**")
+                selected_bucket_ids = []
+                for item in bucket:
+                    label = f"{item.get('name')} {item.get('strength') or ''} · Qty {item.get('quantity')} · Expired {item.get('expiresOn')}"
+                    if st.checkbox(label, value=True, key=f"bucket_select_{item.get('bucketItemId')}"):
+                        selected_bucket_ids.append(item.get("bucketItemId"))
                 method=st.radio("Return method",["DOORSTEP_PICKUP","PHARMACY_DROPOFF"],format_func=lambda x:"Doorstep pickup" if x=="DOORSTEP_PICKUP" else "Direct facility drop-off",horizontal=True)
                 address_map={f"{x.get('addressLine')}, {x.get('city')}":x.get("addressId") for x in addresses}
                 facility_map={f"{x.get('facilityName')} — {x.get('address')}":x.get("facilityId") for x in facilities}
@@ -279,12 +285,13 @@ def customer_my_medicines():
                 address_choice=st.selectbox("Pickup address",list(address_map)) if address_map else None
                 facility_choice=st.selectbox("Drop-off facility",list(facility_map)) if method=="PHARMACY_DROPOFF" and facility_map else None
                 slot_choice=st.selectbox("Pickup slot",list(slot_map)) if method=="DOORSTEP_PICKUP" and slot_map else None
-                send=st.form_submit_button("Submit expired medicines as a return",type="primary")
+                send=st.form_submit_button("Submit selected medicines as a return",type="primary",disabled=not selected_bucket_ids)
             if send:
-                if method=="DOORSTEP_PICKUP" and (not address_choice or not slot_choice): st.error("A saved address and available pickup slot are required.")
+                if not selected_bucket_ids: st.error("Select at least one expired medicine.")
+                elif method=="DOORSTEP_PICKUP" and (not address_choice or not slot_choice): st.error("A saved address and available pickup slot are required.")
                 elif method=="PHARMACY_DROPOFF" and not facility_choice: st.error("Select an operational drop-off facility.")
                 else:
-                    result=api("POST","/api/return-bucket/submit",data={"addressId":address_map.get(address_choice) if address_choice else None,"returnMethod":method,"pickupSlotId":slot_map.get(slot_choice) if slot_choice else None,"facilityId":facility_map.get(facility_choice) if facility_choice else None})
+                    result=api("POST","/api/return-bucket/submit",data={"bucketItemIds":selected_bucket_ids,"addressId":address_map.get(address_choice) if address_choice else None,"returnMethod":method,"pickupSlotId":slot_map.get(slot_choice) if slot_choice else None,"facilityId":facility_map.get(facility_choice) if facility_choice else None})
                     if result: st.success(f"Return request submitted with {result.get('submittedItems')} expired medicine entries."); st.rerun()
         else: st.success("Your Return Bucket is empty. Expired tracked medicines will appear here automatically.")
 
