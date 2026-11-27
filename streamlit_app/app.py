@@ -224,6 +224,11 @@ def customer_returns():
         addresses = api('GET', '/api/users/me/addresses') or []
         facilities = api('GET', '/api/facilities') or []
         slots = api('GET', '/api/pickup-slots') or []
+        medicine_catalogue = api('GET', '/api/medicines/catalogue', params={'limit': 100}) or []
+        medicine_map = {
+            f"{m.get('name')} {m.get('strength') or ''} — {m.get('dosageForm') or 'Medicine'}": m.get('medicineId')
+            for m in medicine_catalogue
+        }
         with st.form('return_form'):
             method = st.radio('Return method', ['DOORSTEP_PICKUP', 'PHARMACY_DROPOFF'], format_func=lambda x: 'Doorstep pickup' if x == 'DOORSTEP_PICKUP' else 'Direct facility drop-off', horizontal=True)
             address_map = {f"{a.get('addressLine')}, {a.get('city')} ({a.get('addressId')})": a.get('addressId') for a in addresses}
@@ -237,10 +242,13 @@ def customer_returns():
             selected_items = []
             for index in range(int(item_count)):
                 st.markdown(f'**Medicine entry {index + 1}**')
-                query = st.text_input('Search medicine catalogue', key=f'medicine_query_{index}')
-                medicine_results = api('GET', '/api/medicines/search', params={'q': query, 'limit': 30}) if query.strip() else []
-                medicine_map = {f"{m.get('name')} {m.get('strength') or ''} — {m.get('medicineId')}": m.get('medicineId') for m in (medicine_results or [])}
-                medicine_choice = st.selectbox('Medicine', list(medicine_map), key=f'medicine_choice_{index}') if medicine_map else None
+                medicine_choice = st.selectbox(
+                    'Select medicine from catalogue',
+                    ['Choose a medicine…', *medicine_map.keys()],
+                    key=f'medicine_choice_{index}',
+                    disabled=not medicine_map,
+                    help='Start typing to search the catalogue.',
+                )
                 qty = st.number_input('Quantity', min_value=1, max_value=10000, value=1, key=f'medicine_qty_{index}')
                 packaging = st.selectbox('Packaging condition', ['SEALED', 'INTACT', 'DAMAGED', 'OPENED', 'UNKNOWN'], key=f'medicine_packaging_{index}')
                 selected_items.append({'medicineId': medicine_map.get(medicine_choice), 'quantity': int(qty), 'packagingCondition': packaging})
