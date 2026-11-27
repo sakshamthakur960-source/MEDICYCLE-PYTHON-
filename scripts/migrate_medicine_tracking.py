@@ -121,12 +121,38 @@ def validate_bucket_table(inspector):
     return problems
 
 
+def validate_parent_foreign_key_targets(inspector):
+    """Ensure every referenced parent key exists and is UUID-compatible CHAR(32)."""
+    problems = []
+    for table_name, column_name in sorted(PARENT_FOREIGN_KEYS):
+        if not inspector.has_table(table_name):
+            problems.append(f"Required foreign-key parent table {table_name} does not exist")
+            continue
+        columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+        column = columns.get(column_name)
+        if column is None:
+            problems.append(f"Foreign-key target {table_name}.{column_name} does not exist")
+            continue
+        actual_type = column["type"]
+        type_name = actual_type.__class__.__name__.lower()
+        if type_name not in {"char", "varchar"} or actual_type.length != 32:
+            problems.append(
+                f"Foreign-key target {table_name}.{column_name} has incompatible type {actual_type}; expected CHAR(32)"
+            )
+        if column["nullable"]:
+            problems.append(f"Foreign-key target {table_name}.{column_name} is nullable; expected primary-key semantics")
+        pk = set(inspector.get_pk_constraint(table_name).get("constrained_columns") or [])
+        if column_name not in pk:
+            problems.append(f"Foreign-key target {table_name}.{column_name} is not part of the primary key")
+    return problems
+
+
 def validate_schema(inspector):
     problems = validate_user_medicine_columns(inspector)
+    problems.extend(validate_parent_foreign_key_targets(inspector))
     problems.extend(validate_bucket_table(inspector))
     if problems:
-        raise RuntimeError("Schema validation failed:\n - " + "\n - ".join(problems))
-
+        raise RuntimeError("Schema validation failed:\\n - " + "\\n - ".join(problems))
 
 def main():
     parser = argparse.ArgumentParser()
