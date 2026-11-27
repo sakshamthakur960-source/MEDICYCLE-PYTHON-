@@ -6,6 +6,7 @@ Preview by default. Apply only after taking a verified TiDB backup:
 """
 import argparse
 from sqlalchemy import inspect, text
+from sqlalchemy.schema import CreateTable
 from Database import engine
 from models import ReturnBucketItem
 
@@ -31,7 +32,8 @@ def main():
         for statement in statements:
             print(statement + ";")
         if not bucket_exists:
-            print("CREATE TABLE returnBucketItem using the SQLAlchemy model definition.")
+            ddl = str(CreateTable(ReturnBucketItem.__table__).compile(dialect=engine.dialect))
+            print(ddl + ";")
         else:
             print("returnBucketItem already exists.")
         print("Re-run with --apply only after a verified backup.")
