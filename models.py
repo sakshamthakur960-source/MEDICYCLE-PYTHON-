@@ -100,6 +100,21 @@ class UserMedicine(Base):
     packagingState: Mapped[str] = mapped_column(String(255), nullable=False)
     addedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sourcePlatform: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    externalOrderId: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    purchaseDate: Mapped[date | None] = mapped_column(Date, nullable=True)
+    isDemo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class ReturnBucketItem(Base):
+    __tablename__ = 'returnBucketItem'
+    __table_args__ = (UniqueConstraint('userMedicineId', name='uq_return_bucket_user_medicine'),)
+    bucketItemId: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    userId: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("user.userId"), nullable=False)
+    userMedicineId: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("userMedicine.userMedicineId"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="IN_BUCKET")
+    createdAt: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    submittedReturnId: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("returnRequest.returnId"), nullable=True)
 
 
 class MedicineRoutine(Base):
