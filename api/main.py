@@ -278,10 +278,16 @@ def create_address(payload: AddressIn, db: Session = Depends(get_db), user: User
     return address
 
 
+@app.get("/api/medicines/catalogue", response_model=list[MedicineOut])
+def medicine_catalogue(limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Return the active catalogue options for customer return forms."""
+    return db.scalars(select(Medicine).order_by(Medicine.name, Medicine.strength).limit(limit)).all()
+
+
 @app.get("/api/medicines/search", response_model=list[MedicineOut])
 def search_medicines(q: str = Query(min_length=1, max_length=120), limit: int = Query(default=20, ge=1, le=100), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     term = f"%{q.strip()}%"
-    return db.scalars(select(Medicine).where(or_(Medicine.name.ilike(term), Medicine.genericName.ilike(term), Medicine.manufacturer.ilike(term), Medicine.barcode == q.strip())).limit(limit)).all()
+    return db.scalars(select(Medicine).where(or_(Medicine.name.ilike(term), Medicine.genericName.ilike(term), Medicine.manufacturer.ilike(term), Medicine.barcode == q.strip())).order_by(Medicine.name).limit(limit)).all()
 
 
 @app.get("/api/user-medicines")
