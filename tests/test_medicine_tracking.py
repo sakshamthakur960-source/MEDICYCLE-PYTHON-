@@ -63,23 +63,28 @@ def test_near_expiry_is_not_added_to_return_bucket(client, db):
 
 
 def test_demo_medicines_are_per_customer_and_idempotent(client, db):
-    headers, _ = register(client, email="demo-user@example.com")
-    for name in ("Aspirin", "Ibuprofen", "Omeprazole"):
+    for name in ("Demo Medicine A", "Demo Medicine B", "Demo Medicine C"):
         make_medicine(db, name)
+    headers, _ = register(client, email="demo-medicines@example.com")
     first = client.post("/api/my-medicines/demo", headers=headers)
     second = client.post("/api/my-medicines/demo", headers=headers)
     assert first.status_code == 200, first.text
-    assert first.json()["created"] == 6
+    assert first.json()["created"] == 24
+    assert second.status_code == 200, second.text
     assert second.json()["created"] == 0
+
     records = client.get("/api/my-medicines", headers=headers).json()
-    assert len(records) == 6
+    assert len(records) == 24
     assert all(item["isDemo"] for item in records)
     assert {item["sourcePlatform"] for item in records} == {"TATA_1MG", "PHARMEASY"}
-    assert sum(item["expiryStatus"] == "EXPIRED" for item in records) == 2
-    assert sum(item["expiryStatus"] == "NEAR_EXPIRY" for item in records) == 2
-    assert sum(item["expiryStatus"] == "ACTIVE" for item in records) == 2
+    assert sum(item["sourcePlatform"] == "TATA_1MG" for item in records) == 12
+    assert sum(item["sourcePlatform"] == "PHARMEASY" for item in records) == 12
+    assert len({item["expiresOn"] for item in records}) == 24
+    assert sum(item["expiryStatus"] == "EXPIRED" for item in records) == 6
+    assert sum(item["expiryStatus"] == "NEAR_EXPIRY" for item in records) == 6
+    assert sum(item["expiryStatus"] == "ACTIVE" for item in records) == 12
     bucket = client.get("/api/return-bucket", headers=headers).json()
-    assert len(bucket) == 2
+    assert len(bucket) == 6
 
 
 def test_return_bucket_items_can_be_submitted_independently(client, db):

@@ -394,23 +394,24 @@ def add_my_medicine(payload: MedicinePurchaseIn, db: Session = Depends(get_db), 
 
 @app.post("/api/my-medicines/demo")
 def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Idempotently add six illustrative pharmacy-app purchases (three per app)."""
+    """Idempotently add 24 illustrative purchases, split evenly across two pharmacy apps."""
     catalogue = db.scalars(select(Medicine).order_by(Medicine.name).limit(3)).all()
     if len(catalogue) < 3:
         raise HTTPException(status_code=409, detail="At least three catalogue medicines are required for the pharmacy demo.")
 
     today = date.today()
     purchase_date = today - timedelta(days=60)
-    scenarios = (
-        ("EXPIRED", today - timedelta(days=20), "EXPIRED"),
-        ("NEAR", today + timedelta(days=12), "NEAR"),
-        ("ACTIVE", today + timedelta(days=180), "ACTIVE"),
-    )
-    apps = (("TATA_1MG", "TATA1MG"), ("PHARMEASY", "PHARMEASY"))
+    # Every sample has its own expiry date; the one-day offset keeps the two
+    # pharmacy inventories distinct while showing expired, near-expiry and active stock.
+    expiry_offsets = (-45, -15, -5, 7, 14, 25, 35, 60, 90, 120, 180, 270)
+    apps = (("TATA_1MG", "TATA1MG", 0), ("PHARMEASY", "PHARMEASY", 1))
     created = 0
-    for source, source_tag in apps:
-        for medicine, (status_tag, expiry, _) in zip(catalogue, scenarios):
-            order_id = f"MC-DEMO-{source_tag}-{status_tag}-2026"
+
+    for source, source_tag, day_offset in apps:
+        for index, offset in enumerate(expiry_offsets, start=1):
+            medicine = catalogue[(index - 1) % len(catalogue)]
+            expiry = today + timedelta(days=offset + day_offset)
+            order_id = f"MC-DEMO-{source_tag}-{index:02d}-2026"
             exists = db.scalar(select(UserMedicine.userMedicineId).where(
                 UserMedicine.userId == user.userId,
                 UserMedicine.externalOrderId == order_id,
@@ -418,30 +419,43 @@ def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_
             ))
             if exists:
                 continue
-            batch_number = f"{user.userId}-MCDEMO-{source_tag}-{status_tag}"
+
+            batch_number = f"{user.userId}-MCDEMO-{source_tag}-{index:02d}"
             batch = db.scalar(select(MedicineBatch).where(
                 MedicineBatch.medicineId == medicine.medicineId,
                 MedicineBatch.batchNumber == batch_number,
             ))
             if batch is None:
-                batch = MedicineBatch(medicineId=medicine.medicineId, batchNumber=batch_number, expiresOn=expiry)
+                batch = MedicineBatch(
+                    medicineId=medicine.medicineId,
+                    batchNumber=batch_number,
+                    expiresOn=expiry,
+                )
                 db.add(batch)
                 db.flush()
             elif batch.expiresOn != expiry:
-                raise HTTPException(status_code=409, detail=f"Demo batch {status_tag} has an unexpected expiry date.")
+                raise HTTPException(status_code=409, detail=f"Demo batch {source_tag}-{index:02d} has an unexpected expiry date.")
+
             db.add(UserMedicine(
-                userId=user.userId, medicineId=medicine.medicineId, batchId=batch.batchId,
-                quantity=2 if status_tag == "EXPIRED" else 1,
-                packagingState="SEALED", sourcePlatform=source, externalOrderId=order_id,
-                purchaseDate=purchase_date, isDemo=True,
+                userId=user.userId,
+                medicineId=medicine.medicineId,
+                batchId=batch.batchId,
+                quantity=2 if offset < 0 else 1,
+                packagingState="SEALED",
+                sourcePlatform=source,
+                externalOrderId=order_id,
+                purchaseDate=purchase_date,
+                isDemo=True,
                 notes="Illustrative demo purchase; not a real pharmacy order",
             ))
             created += 1
 
     db.commit()
     _sync_expired_bucket(db, user)
-    return {"created": created, "message": "Illustrative purchases loaded for Tata 1mg and PharmEasy; expired items synchronized to Return Bucket."}
-
+    return {
+        "created": created,
+        "message": "24 illustrative purchases loaded (12 each for Tata 1mg and PharmEasy); expired items synchronized to Return Bucket.",
+    }
 
 @app.get("/api/return-bucket")
 def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
