@@ -78,6 +78,7 @@ class MedicinePurchaseIn(BaseModel):
 
 
 class ReturnBucketSubmitIn(BaseModel):
+    bucketItemIds: list[UUID] = Field(min_length=1)
     addressId: UUID | None = None
     returnMethod: str = Field(pattern="^(DOORSTEP_PICKUP|PHARMACY_DROPOFF)$")
     pickupSlotId: UUID | None = None
