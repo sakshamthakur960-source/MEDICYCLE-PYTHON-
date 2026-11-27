@@ -1,0 +1,67 @@
+"""Read-only TiDB/MySQL schema snapshot for GitHub Actions."""
+from __future__ import annotations
+import json, os
+from datetime import datetime, timezone
+from pathlib import Path
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import URL
+
+required=("DB_USER","DB_PASSWORD","DB_NAME","DB_HOST")
+missing=[k for k in required if not os.getenv(k)]
+if missing:
+    raise SystemExit("Missing required GitHub Actions secrets: "+", ".join(missing))
+url=URL.create(
+    "mysql+pymysql",
+    username=os.environ["DB_USER"],
+    password=os.environ["DB_PASSWORD"],
+    host=os.environ["DB_HOST"].strip(),
+    port=int(os.getenv("DB_PORT","4000")),
+    database=os.environ["DB_NAME"],
+    query={"charset":"utf8mb4"},
+)
+engine=create_engine(url,pool_pre_ping=True,connect_args={"connect_timeout":20,"ssl_verify_cert":True,"ssl_verify_identity":True})
+try:
+    inspector=inspect(engine)
+    tables=sorted(inspector.get_table_names())
+    # TiDB's information_schema foreign-key metadata is more reliable here
+    # than SQLAlchemy's MySQL dialect compatibility workaround.
+    fk_rows=engine.connect().execute(text("""
+      SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME,
+             REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+      FROM information_schema.KEY_COLUMN_USAGE
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND REFERENCED_TABLE_NAME IS NOT NULL
+      ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION
+    """)).mappings().all()
+    foreign_keys={}
+    for row in fk_rows:
+      bucket=foreign_keys.setdefault((row["TABLE_NAME"],row["CONSTRAINT_NAME"]),{
+        "name":row["CONSTRAINT_NAME"],"constrained_columns":[],
+        "referred_table":row["REFERENCED_TABLE_NAME"],"referred_columns":[],
+      })
+      bucket["constrained_columns"].append(row["COLUMN_NAME"])
+      bucket["referred_columns"].append(row["REFERENCED_COLUMN_NAME"])
+    snapshot={
+      "generated_at_utc":datetime.now(timezone.utc).isoformat(),
+      "database_name":engine.url.database,
+      "dialect":engine.dialect.name,
+      "table_count":len(tables),
+      "tables":{}
+    }
+    for name in tables:
+      snapshot["tables"][name]={
+        "columns":[
+          {"name":c["name"],"type":str(c["type"]),"nullable":c.get("nullable"),
+           "default":str(c.get("default")) if c.get("default") is not None else None,
+           "autoincrement":c.get("autoincrement")}
+          for c in inspector.get_columns(name)
+        ],
+        "primary_key":inspector.get_pk_constraint(name),
+        "foreign_keys":[fk for (table,_),fk in foreign_keys.items() if table==name],
+        "unique_constraints":inspector.get_unique_constraints(name),
+        "indexes":inspector.get_indexes(name),
+      }
+    Path("live_schema_snapshot.json").write_text(json.dumps(snapshot,indent=2,default=str)+"\n",encoding="utf-8")
+    print(f"Read-only schema snapshot complete: {len(tables)} tables; {sum(len(t['columns']) for t in snapshot['tables'].values())} columns.")
+finally:
+    engine.dispose()
