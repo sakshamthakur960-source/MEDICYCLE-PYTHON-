@@ -55,8 +55,8 @@ def main():
     failures = 0
     try:
         with engine.connect() as conn:
-            # MySQL/TiDB enforce read-only mode for the session transaction.
-            conn.exec_driver_sql("SET SESSION TRANSACTION READ ONLY")
+            # This script is strictly SELECT-only. Avoid SET TRANSACTION READ ONLY because
+            # TiDB rejects that session statement on some cluster versions.
             inspector = inspect(conn)
             preparer = engine.dialect.identifier_preparer
             tables = sorted(inspector.get_table_names())
