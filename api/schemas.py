@@ -64,6 +64,19 @@ class UserMedicineIn(BaseModel):
     notes: str | None = None
 
 
+class MedicinePurchaseIn(BaseModel):
+    medicineId: UUID
+    batchNumber: str = Field(min_length=1, max_length=255)
+    expiresOn: date
+    manufacturedOn: date | None = None
+    quantity: int = Field(gt=0)
+    packagingState: str = Field(default="SEALED", min_length=1, max_length=255)
+    sourcePlatform: str = Field(pattern="^(TATA_1MG|PHARMEASY)$")
+    externalOrderId: str | None = Field(default=None, max_length=255)
+    purchaseDate: date | None = None
+    notes: str | None = None
+
+
 class ReturnItemIn(BaseModel):
     medicineId: UUID
     batchId: UUID | None = None
