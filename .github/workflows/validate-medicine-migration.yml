@@ -1,0 +1,148 @@
+name: Validate MediCycle medicine migration (read only)
+
+on:
+  push:
+    branches:
+      - feature/my-medicines-live-integration
+    paths:
+      - ".github/workflows/validate-medicine-migration.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: medicycle-medicine-migration-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install read-only inspection dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
+      - name: Validate live schema using information_schema (SELECT only)
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          from sqlalchemy import URL, create_engine, text
+          required = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"]
+          missing = [k for k in required if not os.getenv(k)]
+          if missing:
+              raise SystemExit("Missing database secrets: " + ", ".join(missing))
+          url = URL.create("mysql+pymysql", username=os.environ["DB_USER"],
+              password=os.environ["DB_PASSWORD"], host=os.environ["DB_HOST"],
+              port=int(os.environ["DB_PORT"]), database=os.environ["DB_NAME"],
+              query={"charset":"utf8mb4"})
+          engine = create_engine(url, pool_pre_ping=True)
+          schema = os.environ["DB_NAME"]
+          problems = []
+          with engine.connect() as c:
+              tables = {r[0] for r in c.execute(text("""
+                  SELECT TABLE_NAME FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA=:s AND TABLE_TYPE='BASE TABLE'
+              """), {"s":schema})}
+              cols = c.execute(text("""
+                  SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+                         IS_NULLABLE, COLUMN_DEFAULT
+                  FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA=:s AND TABLE_NAME='userMedicine'
+              """), {"s":schema}).mappings().all()
+              actual = {r["COLUMN_NAME"]:r for r in cols}
+              expected = {
+                  "sourcePlatform":("varchar",40,"YES"),
+                  "externalOrderId":("varchar",255,"YES"),
+                  "purchaseDate":("date",None,"YES"),
+                  "isDemo":("tinyint",None,"NO"),
+              }
+              for name,(dtype,length,nullable) in expected.items():
+                  r=actual.get(name)
+                  if not r:
+                      problems.append("userMedicine missing column "+name); continue
+                  if r["DATA_TYPE"].lower()!=dtype or (length is not None and r["CHARACTER_MAXIMUM_LENGTH"]!=length) or r["IS_NULLABLE"]!=nullable:
+                      problems.append("userMedicine."+name+" has unexpected type/nullability")
+              if "returnBucketItem" not in tables:
+                  problems.append("returnBucketItem table missing")
+              else:
+                  bucket_cols=c.execute(text("""
+                      SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE
+                      FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA=:s AND TABLE_NAME='returnBucketItem'
+                  """), {"s":schema}).mappings().all()
+                  expected_bucket={
+                      "bucketItemId":("char",32,"NO"),
+                      "userId":("char",32,"NO"),
+                      "userMedicineId":("char",32,"NO"),
+                      "status":("varchar",40,"NO"),
+                      "createdAt":("datetime",None,"NO"),
+                      "submittedReturnId":("char",32,"YES"),
+                  }
+                  got={r["COLUMN_NAME"]:r for r in bucket_cols}
+                  if set(got)!=set(expected_bucket):
+                      problems.append("returnBucketItem column set differs from expected")
+                  for n,(dt,ln,null) in expected_bucket.items():
+                      r=got.get(n)
+                      if r and (r["DATA_TYPE"].lower()!=dt or (ln is not None and r["CHARACTER_MAXIMUM_LENGTH"]!=ln) or r["IS_NULLABLE"]!=null):
+                          problems.append("returnBucketItem."+n+" has unexpected type/nullability")
+                  pk=c.execute(text("""
+                      SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE
+                      WHERE TABLE_SCHEMA=:s AND TABLE_NAME='returnBucketItem'
+                        AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION
+                  """), {"s":schema}).scalars().all()
+                  if pk != ["bucketItemId"]: problems.append("returnBucketItem primary key mismatch")
+                  fk=c.execute(text("""
+                      SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+                      FROM information_schema.KEY_COLUMN_USAGE
+                      WHERE TABLE_SCHEMA=:s AND TABLE_NAME='returnBucketItem'
+                        AND REFERENCED_TABLE_NAME IS NOT NULL
+                  """), {"s":schema}).all()
+                  got_fk={(r[0],r[1],r[2]) for r in fk}
+                  expected_fk={
+                      ("userId","user","userId"),
+                      ("userMedicineId","userMedicine","userMedicineId"),
+                      ("submittedReturnId","returnRequest","returnId")}
+                  if not expected_fk.issubset(got_fk):
+                      problems.append("returnBucketItem foreign-key targets incomplete")
+                  unique=c.execute(text("""
+                      SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE
+                      FROM information_schema.STATISTICS
+                      WHERE TABLE_SCHEMA=:s AND TABLE_NAME='returnBucketItem'
+                      ORDER BY INDEX_NAME, SEQ_IN_INDEX
+                  """), {"s":schema}).all()
+                  unique_user_medicine=any(r[1]=="userMedicineId" and r[2]==0 and r[0]!="PRIMARY" for r in unique)
+                  if not unique_user_medicine:
+                      problems.append("returnBucketItem unique userMedicineId index missing")
+                  bucket_count=c.execute(text("SELECT COUNT(*) FROM returnBucketItem")).scalar_one()
+              um_count=c.execute(text("SELECT COUNT(*) FROM userMedicine")).scalar_one()
+              total_tables=len(tables)
+              print(json.dumps({"table_count":total_tables,"userMedicine_rows":um_count,
+                  "returnBucketItem_rows":int(bucket_count) if "returnBucketItem" in tables else None,
+                  "expected_additive_columns_present":not any("userMedicine" in p for p in problems),
+                  "problems":problems},indent=2))
+          engine.dispose()
+          if problems: sys.exit(1)
+          print("PASS: additive schema matches expected definitions; no data values read or changed.")
+          PY
+      - name: Run existing read-only integrity preflight
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          PYTHONPATH: .
+        run: |
+          pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
+          python scripts/preflight_live_data.py
