@@ -14,7 +14,7 @@ url=URL.create(
     "mysql+pymysql",
     username=os.environ["DB_USER"],
     password=os.environ["DB_PASSWORD"],
-    host=os.environ["DB_HOST"],
+    host=os.environ["DB_HOST"].strip(),
     port=int(os.getenv("DB_PORT","4000")),
     database=os.environ["DB_NAME"],
     query={"charset":"utf8mb4"},
