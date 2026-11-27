@@ -17,7 +17,7 @@ from models import (
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
     RegisterIn, LoginIn, UserOut, AddressIn, MedicineOut, UserMedicineIn,
-    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn, MedicinePurchaseIn,
+    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn, MedicinePurchaseIn, ReturnBucketSubmitIn,
 )
 from api.security import hash_password, verify_password, create_access_token
 
@@ -408,6 +408,39 @@ def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_c
              "medicineId": str(m.medicineId), "batchId": str(batch.batchId) if batch else None,
              "name": m.name, "strength": m.strength, "quantity": u.quantity,
              "expiresOn": batch.expiresOn.isoformat() if batch else None} for b,u,m,batch in rows]
+
+
+@app.post("/api/return-bucket/submit", status_code=201)
+def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    bucket_rows = db.scalars(select(ReturnBucketItem).where(
+        ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET"
+    ).with_for_update()).all()
+    if not bucket_rows:
+        raise HTTPException(status_code=409, detail="Your Return Bucket is empty")
+    inventory_rows = []
+    for bucket in bucket_rows:
+        inventory = db.get(UserMedicine, bucket.userMedicineId)
+        if inventory is None or inventory.userId != user.userId or inventory.batchId is None:
+            raise HTTPException(status_code=409, detail="A bucket medicine record is no longer valid")
+        batch = db.get(MedicineBatch, inventory.batchId)
+        if batch is None or batch.expiresOn >= date.today():
+            raise HTTPException(status_code=409, detail="Only expired medicines can be submitted from the Return Bucket")
+        inventory_rows.append(inventory)
+    create_payload = ReturnCreateIn(
+        addressId=payload.addressId, returnMethod=payload.returnMethod,
+        pickupSlotId=payload.pickupSlotId, facilityId=payload.facilityId,
+        requestNotes=payload.requestNotes or "Submitted from My Medicines Return Bucket",
+        items=[{"medicineId": x.medicineId, "batchId": x.batchId, "quantity": x.quantity,
+                "packagingCondition": x.packagingState} for x in inventory_rows]
+    )
+    result = create_return(create_payload, db, user)
+    return_id = result["return"].returnId
+    for bucket in bucket_rows:
+        bucket.status = "SUBMITTED"
+        bucket.submittedReturnId = return_id
+    db.commit()
+    return {"returnId": str(return_id), "submittedItems": len(bucket_rows), "status": "SUBMITTED"}
 
 
 @app.get("/api/pickup-slots")
