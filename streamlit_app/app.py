@@ -1,9 +1,11 @@
 from __future__ import annotations
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib import response
 import requests
 import streamlit as st
+import extra_streamlit_components as stx
+import jwt
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -20,6 +22,22 @@ def _api_base() -> str:
 
 
 API_BASE = _api_base()
+AUTH_COOKIE_NAME = "medicycle_access_token"
+
+
+def _persist_access_token(cookie_manager, token: str) -> None:
+    """Persist the bearer token only until the JWT's own expiry."""
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+        expires_at = datetime.fromtimestamp(float(claims["exp"]), tz=timezone.utc)
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError, OverflowError):
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=60)
+
+    remaining = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+    cookie_manager.set(
+        AUTH_COOKIE_NAME, token, key="medicycle_set_auth", path="/",
+        expires_at=expires_at, max_age=remaining, secure=True, same_site="strict",
+    )
 
 st.set_page_config(page_title='MediCycle', page_icon='♻️', layout='wide', initial_sidebar_state='expanded')
 st.write("Configured API:", API_BASE)
@@ -100,6 +118,7 @@ def api(method: str, path: str, *, data=None, params=None, auth=True):
         if response.status_code == 401 and auth and token:
             # Access tokens expire (JWT_EXPIRE_MINUTES); send the user back to sign-in.
             st.session_state.clear()
+            st.session_state['_clear_auth_cookie'] = True
             st.session_state['session_notice'] = 'Your session has expired. Please sign in again.'
             st.rerun()
         st.error(error_message(response))
@@ -133,7 +152,7 @@ def refresh():
     st.rerun()
 
 
-def login_screen():
+def login_screen(cookie_manager):
     st.markdown('<div class="mc-brand"><div class="mc-mark">♻</div><div class="mc-wordmark">MediCycle</div></div>', unsafe_allow_html=True)
     st.markdown('<div class="mc-tagline">Responsible medicine returns · Reverse logistics · Verified disposal</div>', unsafe_allow_html=True)
     hero, forms = st.columns([0.88, 1.12], gap='large', vertical_alignment='center')
@@ -163,6 +182,7 @@ def login_screen():
                 if result and result.get('accessToken'):
                     st.session_state.token = result['accessToken']
                     st.session_state.user = result['user']
+                    _persist_access_token(cookie_manager, result['accessToken'])
                     refresh()
         with st.expander('New to MediCycle? Create a customer account', expanded=False):
             st.caption('Create an account to submit and track medicine returns.')
@@ -178,6 +198,7 @@ def login_screen():
                 if result and result.get('accessToken'):
                     st.session_state.token = result['accessToken']
                     st.session_state.user = result['user']
+                    _persist_access_token(cookie_manager, result['accessToken'])
                     refresh()
     st.markdown('<p class="mc-subtle" style="text-align:center;margin-top:24px">Facility staff and drivers sign in using accounts provisioned by an administrator.</p>', unsafe_allow_html=True)
 
@@ -549,11 +570,26 @@ def driver_workspace():
 
 
 def main():
+    # Streamlit session_state is reset by a browser refresh. Restore the
+    # short-lived API token from a browser cookie and rehydrate the user profile.
+    cookie_manager = stx.CookieManager(key="medicycle_auth_cookie_manager")
+    if st.session_state.pop("_clear_auth_cookie", False):
+        if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
+            cookie_manager.delete(AUTH_COOKIE_NAME, key="medicycle_delete_auth")
+
+    if not st.session_state.get("token"):
+        saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
+        if saved_token:
+            st.session_state["token"] = saved_token
+            profile = api("GET", "/api/users/me")
+            if profile:
+                st.session_state["user"] = profile
+
     if not st.session_state.get('token'):
         notice = st.session_state.pop('session_notice', None)
         if notice:
             st.warning(notice)
-        login_screen()
+        login_screen(cookie_manager)
         return
     user = st.session_state.get('user') or {}
     with st.sidebar:
@@ -561,6 +597,8 @@ def main():
         st.caption(f"Signed in as {user.get('fullName', 'User')}")
         page = st.radio('Workspace', ['Dashboard', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
         if st.button('Sign out', use_container_width=True):
+            if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
+                cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
             st.session_state.clear(); refresh()
         st.divider()
         st.caption(f'API: {API_BASE}')
