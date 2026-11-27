@@ -17,18 +17,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      DB_HOST: ${{ secrets.MEDICYCLE_DB_HOST }}
-      DB_PORT: ${{ secrets.MEDICYCLE_DB_PORT }}
-      DB_USER: ${{ secrets.MEDICYCLE_DB_USER }}
-      DB_PASSWORD: ${{ secrets.MEDICYCLE_DB_PASSWORD }}
-      DB_NAME: ${{ secrets.MEDICYCLE_DB_NAME }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
     steps:
       - name: Check required secrets are configured
         shell: bash
         run: |
           for key in DB_HOST DB_USER DB_PASSWORD DB_NAME; do
             if [ -z "${!key}" ]; then
-              echo "::error::Missing repository secret for $key. Configure MEDICYCLE_$key in Settings > Secrets and variables > Actions."
+              echo "::error::Missing repository secret for $key. Check the existing DB_* repository secrets in Settings > Secrets and variables > Actions."
               exit 1
             fi
           done
