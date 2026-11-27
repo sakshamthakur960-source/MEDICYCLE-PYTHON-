@@ -11,8 +11,14 @@ from sqlalchemy.orm import DeclarativeBase
 
 load_dotenv()
 
+def _env_value(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip()
+
 required = ("DB_USER", "DB_PASSWORD", "DB_NAME")
-missing = [key for key in required if not os.getenv(key)]
+missing = [key for key in required if not _env_value(key)]
 if missing:
     raise RuntimeError(
         "Missing database configuration: " + ", ".join(missing) +
@@ -21,11 +27,11 @@ if missing:
 
 connection_url = URL.create(
     drivername="mysql+pymysql",
-    username=os.getenv("DB_USER"),
+    username=_env_value("DB_USER"),
     password=os.getenv("DB_PASSWORD"),
-    host=os.getenv("DB_HOST", "localhost"),
-    port=int(os.getenv("DB_PORT", "3306")),
-    database=os.getenv("DB_NAME", "medicycle"),
+    host=_env_value("DB_HOST", "localhost"),
+    port=int(_env_value("DB_PORT", "3306")),
+    database=_env_value("DB_NAME", "medicycle"),
     query={"charset": "utf8mb4"},
 )
 
