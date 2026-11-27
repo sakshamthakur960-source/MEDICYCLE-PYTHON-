@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -10,14 +10,14 @@ from sqlalchemy.orm import Session
 
 from models import (
     User, UserAddress, Medicine, MedicineBatch, UserMedicine, ReturnRequest,
-    ReturnItem, PickupSlot, Wallet, WalletTransaction, Reward,
+    ReturnItem, ReturnBucketItem, PickupSlot, Wallet, WalletTransaction, Reward,
     RewardRedemption, DisposalCertificate, ReturnStatusHistory, Facility,
     FacilityStaff, Driver,
 )
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
     RegisterIn, LoginIn, UserOut, AddressIn, MedicineOut, UserMedicineIn,
-    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn,
+    ReturnCreateIn, ReturnDecisionIn, RewardRedemptionIn, MedicinePurchaseIn,
 )
 from api.security import hash_password, verify_password, create_access_token
 
@@ -308,6 +308,106 @@ def add_user_medicine(payload: UserMedicineIn, db: Session = Depends(get_db), us
     db.commit()
     db.refresh(item)
     return item
+
+
+def _sync_expired_bucket(db: Session, user: User):
+    today = date.today()
+    rows = db.execute(
+        select(UserMedicine, MedicineBatch).join(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
+        .where(UserMedicine.userId == user.userId, MedicineBatch.expiresOn < today)
+    ).all()
+    for inventory, batch in rows:
+        exists = db.scalar(select(ReturnBucketItem.bucketItemId).where(ReturnBucketItem.userMedicineId == inventory.userMedicineId))
+        if not exists:
+            db.add(ReturnBucketItem(userId=user.userId, userMedicineId=inventory.userMedicineId, status="IN_BUCKET"))
+    db.commit()
+
+
+@app.get("/api/my-medicines")
+def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    rows = db.execute(
+        select(UserMedicine, Medicine, MedicineBatch)
+        .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
+        .outerjoin(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
+        .where(UserMedicine.userId == user.userId).order_by(UserMedicine.addedAt.desc())
+    ).all()
+    today = date.today()
+    result = []
+    for inventory, medicine, batch in rows:
+        expiry = batch.expiresOn if batch else None
+        days = (expiry - today).days if expiry else None
+        state = "EXPIRED" if days is not None and days < 0 else "NEAR_EXPIRY" if days is not None and days <= 30 else "ACTIVE"
+        result.append({
+            "userMedicineId": str(inventory.userMedicineId), "medicineId": str(medicine.medicineId),
+            "name": medicine.name, "strength": medicine.strength, "dosageForm": medicine.dosageForm,
+            "quantity": inventory.quantity, "packagingState": inventory.packagingState,
+            "batchId": str(batch.batchId) if batch else None, "batchNumber": batch.batchNumber if batch else None,
+            "expiresOn": expiry.isoformat() if expiry else None, "daysToExpiry": days, "expiryStatus": state,
+            "sourcePlatform": inventory.sourcePlatform, "externalOrderId": inventory.externalOrderId,
+            "purchaseDate": inventory.purchaseDate.isoformat() if inventory.purchaseDate else None, "isDemo": inventory.isDemo
+        })
+    return result
+
+
+@app.post("/api/my-medicines", status_code=201)
+def add_my_medicine(payload: MedicinePurchaseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    medicine = db.get(Medicine, payload.medicineId)
+    if medicine is None:
+        raise HTTPException(status_code=404, detail="Medicine not found")
+    batch = db.scalar(select(MedicineBatch).where(MedicineBatch.medicineId == medicine.medicineId, MedicineBatch.batchNumber == payload.batchNumber))
+    if batch is None:
+        batch = MedicineBatch(medicineId=medicine.medicineId, batchNumber=payload.batchNumber,
+                              manufacturedOn=payload.manufacturedOn, expiresOn=payload.expiresOn)
+        db.add(batch)
+        db.flush()
+    elif batch.expiresOn != payload.expiresOn:
+        raise HTTPException(status_code=409, detail="This batch number already exists with a different expiry date")
+    inventory = UserMedicine(userId=user.userId, medicineId=medicine.medicineId, batchId=batch.batchId,
+        quantity=payload.quantity, packagingState=payload.packagingState, notes=payload.notes,
+        sourcePlatform=payload.sourcePlatform, externalOrderId=payload.externalOrderId,
+        purchaseDate=payload.purchaseDate, isDemo=False)
+    db.add(inventory)
+    db.commit()
+    db.refresh(inventory)
+    return {"userMedicineId": str(inventory.userMedicineId), "message": "Medicine added to your tracker"}
+
+
+@app.post("/api/my-medicines/demo")
+def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if db.scalar(select(UserMedicine.userMedicineId).where(UserMedicine.userId == user.userId, UserMedicine.isDemo.is_(True))):
+        return {"created": 0, "message": "Demo medicines have already been loaded for this account"}
+    catalogue = db.scalars(select(Medicine).order_by(Medicine.name).limit(3)).all()
+    if not catalogue:
+        raise HTTPException(status_code=409, detail="Medicine catalogue is empty. Load the catalogue first.")
+    today = date.today()
+    examples = [(catalogue[0], "DEMO-EXPIRED-01", today-timedelta(days=20), "TATA_1MG"),
+                (catalogue[min(1,len(catalogue)-1)], "DEMO-SOON-01", today+timedelta(days=12), "PHARMEASY"),
+                (catalogue[min(2,len(catalogue)-1)], "DEMO-ACTIVE-01", today+timedelta(days=180), "TATA_1MG")]
+    for med, batch_no, expiry, source in examples:
+        batch = MedicineBatch(medicineId=med.medicineId, batchNumber=f"{user.userId}-{batch_no}", expiresOn=expiry)
+        db.add(batch); db.flush()
+        db.add(UserMedicine(userId=user.userId, medicineId=med.medicineId, batchId=batch.batchId,
+            quantity=1, packagingState="SEALED", sourcePlatform=source, externalOrderId=f"DEMO-{batch_no}",
+            purchaseDate=today-timedelta(days=60), isDemo=True, notes="Illustrative demo record"))
+    db.commit()
+    _sync_expired_bucket(db, user)
+    return {"created": len(examples), "message": "Illustrative demo medicines loaded"}
+
+
+@app.get("/api/return-bucket")
+def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _sync_expired_bucket(db, user)
+    rows = db.execute(select(ReturnBucketItem, UserMedicine, Medicine, MedicineBatch)
+        .join(UserMedicine, ReturnBucketItem.userMedicineId == UserMedicine.userMedicineId)
+        .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
+        .outerjoin(MedicineBatch, UserMedicine.batchId == MedicineBatch.batchId)
+        .where(ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET")
+        .order_by(ReturnBucketItem.createdAt)).all()
+    return [{"bucketItemId": str(b.bucketItemId), "userMedicineId": str(u.userMedicineId),
+             "medicineId": str(m.medicineId), "batchId": str(batch.batchId) if batch else None,
+             "name": m.name, "strength": m.strength, "quantity": u.quantity,
+             "expiresOn": batch.expiresOn.isoformat() if batch else None} for b,u,m,batch in rows]
 
 
 @app.get("/api/pickup-slots")
