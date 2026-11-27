@@ -10,8 +10,8 @@
 - Specification attributes: **376**
 - SQLAlchemy model classes: **40**
 - SQLAlchemy mapped columns: **364**
-- All specified entities mapped: **37/39**
-- Extra implementation table(s): `returnBucketItem`, `returnStatusHistory`, `facilityStaff`
+- All specified entities mapped: **39/39**
+- Extra implementation table(s): `returnBucketItem`
 
 ### Systemic incompatibilities
 
@@ -1700,6 +1700,10 @@
 - Treat audit logs as append-only; application roles must not update or delete them in normal operation.
 - Never record password hashes, access tokens, full payment credentials, or unnecessary sensitive document contents in JSON snapshots.
 - Define retention, access, and export policies.
+
+
+
+> **Mapping correction (2026-11-27):** The initial report's summary used a naive pluralization rule and incorrectly treated the already-existing `returnStatusHistory` and `facilityStaff` model tables as extra. Rechecking the ORM's declared `__tablename__` values against the specification confirms that all 39 specified entities have corresponding model classes. The only additional implementation table is `returnBucketItem`. This correction changes the entity-mapping count only; it does not change the field-level differences or establish that the live TiDB schema matches either representation.
 
 ## Reconciliation decisions still required
 
