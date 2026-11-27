@@ -414,9 +414,20 @@ def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_c
 @app.post("/api/return-bucket/submit", status_code=201)
 def submit_return_bucket(payload: ReturnBucketSubmitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     _sync_expired_bucket(db, user)
-    bucket_rows = db.scalars(select(ReturnBucketItem).where(ReturnBucketItem.userId == user.userId, ReturnBucketItem.status == "IN_BUCKET").with_for_update()).all()
-    if not bucket_rows:
-        raise HTTPException(status_code=409, detail="Your Return Bucket is empty")
+    selected_ids = set(payload.bucketItemIds)
+    if len(selected_ids) != len(payload.bucketItemIds):
+        raise HTTPException(status_code=422, detail="Duplicate Return Bucket item IDs are not allowed")
+    bucket_rows = db.scalars(
+        select(ReturnBucketItem)
+        .where(
+            ReturnBucketItem.userId == user.userId,
+            ReturnBucketItem.status == "IN_BUCKET",
+            ReturnBucketItem.bucketItemId.in_(selected_ids),
+        )
+        .with_for_update()
+    ).all()
+    if len(bucket_rows) != len(selected_ids):
+        raise HTTPException(status_code=404, detail="One or more selected medicines are not in your active Return Bucket")
     if payload.addressId is not None:
         address = db.get(UserAddress, payload.addressId)
         if address is None or address.userId != user.userId:
