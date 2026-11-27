@@ -269,11 +269,8 @@ def customer_wallet():
         st.metric('Available MediCredits', wallet.get('availableBalance', 0))
 
     transactions = api('GET', '/api/wallet/transactions') or []
-    welcome_claimed = any(
-        str(tx.get('referenceCode') or '').startswith('WELCOME-')
-        or 'welcome bonus' in str(tx.get('description') or '').lower()
-        for tx in transactions
-    )
+    welcome_status = api('GET', '/api/wallet/welcome-bonus-status') or {}
+    welcome_claimed = bool(welcome_status.get('claimed'))
 
     st.subheader('Welcome coupon')
     with st.container(border=True):
