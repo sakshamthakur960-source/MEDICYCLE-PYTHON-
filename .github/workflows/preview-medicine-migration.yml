@@ -3,7 +3,7 @@ name: Preview MediCycle medicine migration
 on:
   push:
     branches:
-      - feature/medicine-expiry-tracking-sync
+      - feature/my-medicines-live-integration
     paths:
       - "scripts/migrate_medicine_tracking.py"
       - ".github/workflows/preview-medicine-migration.yml"
