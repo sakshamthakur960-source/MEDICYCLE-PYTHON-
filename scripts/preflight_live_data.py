@@ -116,9 +116,13 @@ def main():
                         unique_groups.append((idx.get("name"), cols))
                 for name, cols in unique_groups:
                     grouped_cols = ", ".join(qname(preparer, c) for c in cols)
+                    nonnull_filter = " AND ".join(
+                        f"{qname(preparer, col)} IS NOT NULL" for col in cols
+                    )
                     sql = (
                         f"SELECT COUNT(*) FROM (SELECT {grouped_cols} FROM {qt} "
-                        f"GROUP BY {grouped_cols} HAVING COUNT(*) > 1) AS duplicate_groups"
+                        f"WHERE {nonnull_filter} GROUP BY {grouped_cols} "
+                        f"HAVING COUNT(*) > 1) AS duplicate_groups"
                     )
                     duplicate_groups = int(conn.execute(text(sql)).scalar_one())
                     report["checks"].append({
