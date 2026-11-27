@@ -129,8 +129,8 @@ jobs:
               total_tables=len(tables)
               print(json.dumps({"table_count":total_tables,"userMedicine_rows":um_count,
                   "returnBucketItem_rows":int(bucket_count) if "returnBucketItem" in tables else None,
-                  "expected_additive_columns_present":not any("userMedicine" in p for p in problems),
-                  "problems":problems},indent=2))
+                  "expected_additive_columns_present":all(n in actual for n in expected),
+                  "returnBucketItem_indexes":[{"name":r[0],"column":r[1],"non_unique":r[2]} for r in unique] if "returnBucketItem" in tables else [],\n            "problems":problems},indent=2))
           engine.dispose()
           if problems: sys.exit(1)
           print("PASS: additive schema matches expected definitions; no data values read or changed.")
