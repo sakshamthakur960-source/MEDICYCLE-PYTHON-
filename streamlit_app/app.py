@@ -40,7 +40,6 @@ def _persist_access_token(cookie_manager, token: str) -> None:
     )
 
 st.set_page_config(page_title='MediCycle', page_icon='♻️', layout='wide', initial_sidebar_state='expanded')
-st.write("Configured API:", API_BASE)
 
 # Visual system: presentation only; API calls and business workflows remain unchanged.
 st.markdown("""<style>
@@ -79,6 +78,44 @@ input, textarea, [data-baseweb="select"] > div { border-radius:10px !important; 
 .mc-feature span { display:grid; place-items:center; width:29px; height:29px; border-radius:9px; background:rgba(255,255,255,.14); }
 .mc-section-label { color:var(--mc-green); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:7px; }
 .mc-subtle { color:#718780; font-size:.9rem; }
+
+/* ---- Streamlit workspace polish ---- */
+.stApp { background:linear-gradient(180deg,#f4faf7 0%,#f8fbfa 260px,#f7faf9 100%); }
+.block-container { padding-left:clamp(1.2rem,4vw,3.2rem); padding-right:clamp(1.2rem,4vw,3.2rem); }
+[data-testid="stHeader"] { background:rgba(247,251,249,.82); backdrop-filter:blur(14px); }
+[data-testid="stSidebar"] { box-shadow:8px 0 28px rgba(20,59,53,.035); }
+[data-testid="stSidebar"] [data-testid="stRadio"] > label { font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:#82958f; }
+[data-testid="stSidebar"] [role="radiogroup"] { gap:5px; }
+[data-testid="stSidebar"] [role="radiogroup"] label { padding:10px 12px; border-radius:11px; transition:background .18s ease,transform .18s ease; }
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:rgba(19,134,111,.08); transform:translateX(2px); }
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] { background:#dcefe7; color:#0b705c; font-weight:700; }
+[data-testid="stVerticalBlockBorderWrapper"] { border-color:#e0ebe6 !important; border-radius:17px !important; background:rgba(255,255,255,.88); box-shadow:0 7px 24px rgba(20,59,53,.045); }
+[data-testid="stMetric"] { min-height:116px; display:flex; flex-direction:column; justify-content:center; transition:transform .2s ease,box-shadow .2s ease; }
+[data-testid="stMetric"]:hover { transform:translateY(-2px); box-shadow:0 12px 28px rgba(20,59,53,.075); }
+[data-testid="stMetricDelta"] { font-weight:700; }
+[data-testid="stTabs"] [role="tablist"] { gap:7px; border-bottom:1px solid #e2ece7; }
+[data-testid="stTabs"] button[role="tab"] { border-radius:10px 10px 0 0; padding:10px 15px; color:#718780; }
+[data-testid="stTabs"] button[aria-selected="true"] { color:#08765f; border-bottom-color:#13866f; }
+[data-testid="stExpander"] { border:1px solid #e0ebe6; border-radius:14px; background:rgba(255,255,255,.76); overflow:hidden; }
+.stButton > button, .stFormSubmitButton > button { box-shadow:0 3px 9px rgba(20,59,53,.045); }
+.stButton > button:focus-visible, .stFormSubmitButton > button:focus-visible { outline:3px solid rgba(19,134,111,.22); outline-offset:2px; }
+[data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus { border-color:#13866f !important; box-shadow:0 0 0 3px rgba(19,134,111,.12) !important; }
+[data-testid="stSelectbox"] [data-baseweb="select"] > div, [data-testid="stDateInput"] input, [data-testid="stNumberInput"] input, [data-testid="stTimeInput"] input { background:#fff; border-color:#dce9e4; border-radius:11px; }
+[data-testid="stAlert"] { border:1px solid #e1ebe6; box-shadow:0 3px 12px rgba(20,59,53,.025); }
+[data-testid="stDataFrame"] { background:#fff; box-shadow:0 5px 18px rgba(20,59,53,.035); }
+hr { border-color:#e2ece7 !important; }
+.mc-page-intro { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0 0 1.15rem; padding:17px 20px; border:1px solid #e0ebe6; border-radius:16px; background:linear-gradient(110deg,#fff 0%,#f0f8f4 100%); box-shadow:0 7px 22px rgba(20,59,53,.035); }
+.mc-page-intro small { color:#13866f; font-size:.7rem; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }
+.mc-page-intro strong { display:block; margin-top:3px; color:#143b35; font-family:'Manrope',sans-serif; font-size:1.05rem; }
+.mc-page-intro span { color:#718780; font-size:.84rem; }
+@media(max-width:700px) {
+ .block-container { padding-top:1.2rem; }
+ [data-testid="stMetric"] { min-height:96px; padding:14px; }
+ .mc-auth-hero { min-height:280px; }
+}
+@media(prefers-reduced-motion:reduce) {
+ *,*::before,*::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
+}
 @media(max-width:900px){ .mc-auth-hero{min-height:300px;padding:28px;} .mc-auth-hero h2{font-size:1.65rem;} .mc-wordmark{font-size:1.7rem;} }
 </style>""", unsafe_allow_html=True)
 
@@ -785,6 +822,13 @@ def main():
             st.session_state.clear(); refresh()
         st.divider()
         st.caption(f'API: {API_BASE}')
+    st.markdown(
+        '<div class="mc-page-intro"><div><small>MEDICYCLE WORKSPACE</small>'
+        '<strong>Care, collected responsibly.</strong>'
+        '<span>Your medicine returns and reverse-logistics workspace</span></div>'
+        '<span>♻ &nbsp; Responsible returns</span></div>',
+        unsafe_allow_html=True,
+    )
     if page == 'Dashboard': customer_dashboard()
     elif page == 'My Medicines': customer_my_medicines()
     elif page == 'Medicine Apps': customer_medicine_apps()
