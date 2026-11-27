@@ -325,6 +325,7 @@ def _sync_expired_bucket(db: Session, user: User):
 @app.get("/api/my-medicines")
 def my_medicines(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     _sync_expired_bucket(db, user)
+    db.commit()
     rows = db.execute(
         select(UserMedicine, Medicine, MedicineBatch)
         .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
@@ -397,6 +398,7 @@ def load_demo_medicines(db: Session = Depends(get_db), user: User = Depends(get_
 @app.get("/api/return-bucket")
 def list_return_bucket(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     _sync_expired_bucket(db, user)
+    db.commit()
     rows = db.execute(select(ReturnBucketItem, UserMedicine, Medicine, MedicineBatch)
         .join(UserMedicine, ReturnBucketItem.userMedicineId == UserMedicine.userMedicineId)
         .join(Medicine, UserMedicine.medicineId == Medicine.medicineId)
