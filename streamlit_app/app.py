@@ -221,6 +221,8 @@ def customer_my_medicines():
     st.title("My Medicines")
     st.caption("Track medicines purchased from pharmacy apps. Add details from your order or medicine packaging.")
     st.info("Tata 1mg and PharmEasy are source labels only; MediCycle does not currently import live order history. Near-expiry means 30 days or less. Expired means the expiry date is before today.")
+    # Synchronization is an explicit POST operation; GET endpoints remain read-only.
+    api("POST", "/api/return-bucket/sync")
     inventory = api("GET", "/api/my-medicines") or []
     bucket = api("GET", "/api/return-bucket") or []
     c1,c2,c3,c4=st.columns(4)
