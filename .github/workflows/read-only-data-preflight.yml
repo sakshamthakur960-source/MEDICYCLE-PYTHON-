@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - audit/read-only-data-preflight
+      - main
 
 permissions:
   contents: read
