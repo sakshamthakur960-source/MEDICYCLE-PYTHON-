@@ -113,6 +113,29 @@ def get_profile(user: User = Depends(get_current_user)):
     return user
 
 
+@app.get("/api/wallet/welcome-bonus-status")
+def welcome_bonus_status(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    wallet = db.scalar(select(Wallet).where(Wallet.userId == user.userId))
+    if wallet is None:
+        return {"claimed": False}
+
+    existing_bonus = db.scalar(
+        select(WalletTransaction.transactionId)
+        .where(
+            WalletTransaction.walletId == wallet.walletId,
+            or_(
+                WalletTransaction.referenceCode.like("WELCOME-%"),
+                WalletTransaction.description.ilike("%welcome bonus%"),
+            ),
+        )
+        .limit(1)
+    )
+    return {"claimed": existing_bonus is not None}
+
+
 @app.post("/api/wallet/claim-welcome-bonus")
 def claim_welcome_bonus(
     db: Session = Depends(get_db),
