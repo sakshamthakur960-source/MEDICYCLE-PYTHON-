@@ -370,7 +370,17 @@ def wallet_summary(db: Session = Depends(get_db), user: User = Depends(get_curre
 def list_rewards(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     now = datetime.utcnow()
     # Case-insensitive status match: seed data stores 'AVAILABLE' and redeem_reward() already uses .lower().
-    return db.scalars(select(Reward).where(func.lower(Reward.status) == "available", or_(Reward.validUntil.is_(None), Reward.validUntil >= now)).order_by(Reward.creditsRequired)).all()
+    # Hide the known seeded demo coupons from the customer catalogue.
+    # Their database rows are intentionally left untouched until redemption references
+    # can be checked safely in the live TiDB database.
+    return db.scalars(
+        select(Reward).where(
+            func.lower(Reward.status) == "available",
+            or_(Reward.validUntil.is_(None), Reward.validUntil >= now),
+            func.lower(Reward.partnerName) != "demo partner",
+            ~func.lower(Reward.title).like("demo voucher -%"),
+        ).order_by(Reward.creditsRequired)
+    ).all()
 
 
 @app.get("/api/wallet/transactions")
