@@ -590,11 +590,11 @@ def main():
             saved_token = (cookie_manager.cookies or {}).get(AUTH_COOKIE_NAME)
 
         if saved_token:
-            with st.spinner("Restoring your MediCycle session…"):
-                st.session_state["token"] = saved_token
-                profile = api("GET", "/api/users/me")
-                if profile:
-                    st.session_state["user"] = profile
+            st.info("Restoring your MediCycle session…")
+            st.session_state["token"] = saved_token
+            profile = api("GET", "/api/users/me")
+            if profile:
+                st.session_state["user"] = profile
 
     if not st.session_state.get('token'):
         notice = st.session_state.pop('session_notice', None)
