@@ -243,6 +243,55 @@ def login_screen(cookie_manager):
     st.markdown('<p class="mc-subtle" style="text-align:center;margin-top:24px">Facility staff and drivers sign in using accounts provisioned by an administrator.</p>', unsafe_allow_html=True)
 
 
+def customer_recent_returns(records):
+    """Render recent customer returns as compact cards without changing return data."""
+    if not records:
+        st.info('No return requests yet. Your submitted requests will appear here.')
+        return
+
+    status_styles = {
+        'SUBMITTED': ('Submitted', '🟡'),
+        'VERIFIED': ('Verified', '🔵'),
+        'ASSIGNED': ('Driver assigned', '🟣'),
+        'PICKED_UP': ('Picked up', '🔵'),
+        'IN_TRANSIT': ('In transit', '🔵'),
+        'ARRIVED': ('Arrived at facility', '🔵'),
+        'RECEIVED': ('Received', '🟢'),
+        'ACCEPTED': ('Accepted', '🟢'),
+        'REJECTED': ('Rejected', '🔴'),
+        'COMPLETED': ('Completed', '🟢'),
+        'CANCELLED': ('Cancelled', '⚪'),
+    }
+
+    for item in records[:8]:
+        return_id = str(item.get('returnId') or '')
+        short_id = return_id[-8:].upper() if return_id else '—'
+        raw_status = str(item.get('status') or 'UNKNOWN').upper()
+        status_label, status_icon = status_styles.get(
+            raw_status, (raw_status.replace('_', ' ').title(), '⚪')
+        )
+        method = str(item.get('returnMethod') or 'Return method not specified')
+        method_label = method.replace('_', ' ').title()
+        created = item.get('createdAt')
+        if created:
+            try:
+                created_label = datetime.fromisoformat(str(created).replace('Z', '+00:00')).strftime('%d %b %Y · %I:%M %p')
+            except (TypeError, ValueError):
+                created_label = str(created).replace('T', ' ')[:16]
+        else:
+            created_label = 'Date unavailable'
+
+        with st.container(border=True):
+            left, right = st.columns([3, 1])
+            left.markdown(f"**Return #{short_id}**")
+            left.caption(f"{method_label} · {created_label}")
+            if item.get('requestNotes'):
+                left.write(str(item.get('requestNotes')))
+            if raw_status == 'REJECTED' and item.get('rejectionReason'):
+                left.caption(f"Reason: {item.get('rejectionReason')}")
+            right.markdown(f"**{status_icon} {status_label}**")
+
+
 def customer_dashboard():
     st.title('Customer dashboard')
     profile = api('GET', '/api/users/me')
@@ -253,7 +302,7 @@ def customer_dashboard():
     c2.metric('Return requests', len(returns) if isinstance(returns, list) else '—')
     c3.metric('Account', profile.get('accountStatus', '—') if profile else '—')
     st.markdown('#### Your recent returns')
-    records_table(returns[:8] if isinstance(returns, list) else [])
+    customer_recent_returns(returns if isinstance(returns, list) else [])
     st.info('Credits are added only after the facility physically receives and verifies an entire return request.')
 
 
