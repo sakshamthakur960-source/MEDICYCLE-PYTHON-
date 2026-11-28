@@ -278,6 +278,28 @@ def create_address(payload: AddressIn, db: Session = Depends(get_db), user: User
     return address
 
 
+@app.patch("/api/users/me/addresses/{address_id}")
+def update_address(address_id: UUID, payload: AddressIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Update one of the authenticated customer's saved addresses."""
+    address = db.get(UserAddress, address_id)
+    if address is None or address.userId != user.userId:
+        raise HTTPException(status_code=404, detail="Address not found for this user")
+    if payload.latitude is not None and not Decimal("-90") <= payload.latitude <= Decimal("90"):
+        raise HTTPException(status_code=422, detail="Latitude must be between -90 and 90")
+    if payload.longitude is not None and not Decimal("-180") <= payload.longitude <= Decimal("180"):
+        raise HTTPException(status_code=422, detail="Longitude must be between -180 and 180")
+    if payload.isDefault:
+        db.query(UserAddress).filter(
+            UserAddress.userId == user.userId,
+            UserAddress.addressId != address.addressId,
+        ).update({UserAddress.isDefault: False})
+    for key, value in payload.model_dump().items():
+        setattr(address, key, value)
+    db.commit()
+    db.refresh(address)
+    return address
+
+
 @app.get("/api/medicines/catalogue", response_model=list[MedicineOut])
 def medicine_catalogue(limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Return the active catalogue options for customer return forms."""
