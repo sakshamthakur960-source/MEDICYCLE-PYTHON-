@@ -1172,6 +1172,39 @@ def workspace_settings(available_workspaces: list[str], active_workspace: str, c
                 st.success(f"{selected_workspace} Workspace is already active.")
 
 
+
+
+def customer_notifications():
+    """Render customer notifications as a readable activity feed."""
+    st.subheader("Notifications")
+    notifications = api("GET", "/api/notifications") or []
+    if not notifications:
+        st.info("You're all caught up. No notifications yet.")
+        return
+
+    unread_count = sum(1 for item in notifications if not item.get("isRead"))
+    st.caption(f"{unread_count} unread · {len(notifications)} total")
+
+    for item in notifications:
+        title = item.get("title") or "MediCycle update"
+        message = item.get("message") or "You have a new update."
+        created = item.get("createdAt")
+        timestamp = str(created).replace("T", " ")[:16] if created else "Date unavailable"
+        is_read = bool(item.get("isRead"))
+        with st.container(border=True):
+            top_left, top_right = st.columns([5, 1])
+            top_left.markdown(f"**{title}**")
+            if not is_read:
+                top_right.markdown("<span style='color:#2563eb;font-weight:600'>● UNREAD</span>", unsafe_allow_html=True)
+            top_left.write(message)
+            top_left.caption(timestamp)
+            if not is_read and item.get("notificationId"):
+                if st.button("Mark as read", key=f"read_notification_{item['notificationId']}"):
+                    result = api("PATCH", f"/api/notifications/{item['notificationId']}/read")
+                    if result:
+                        st.rerun()
+
+
 def main():
     # Restore authentication and workspace preference from separate cookies.
     cookie_manager = stx.CookieManager(key="medicycle_auth_cookie_manager")
@@ -1264,7 +1297,7 @@ def main():
         elif page == "Certificates":
             records_table(api("GET", "/api/certificates") or [], "Disposal certificates")
         elif page == "Notifications":
-            records_table(api("GET", "/api/notifications") or [], "Notifications")
+            customer_notifications()
     elif active_workspace == "Driver":
         driver_workspace()
     elif active_workspace == "Facility":
