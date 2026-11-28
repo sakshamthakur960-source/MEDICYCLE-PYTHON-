@@ -876,6 +876,88 @@ def customer_wallet():
         else:
             st.info('Your wallet activity will appear here.')
 
+def customer_shop():
+    """Render the simulated MediCycle coupon shop and the customer's issued coupons."""
+    st.title("MediCycle Shop")
+    st.caption("Exchange MediCredits for simulated pharmacy-app discount coupons.")
+    st.warning(
+        "Demo mode: these are internal test vouchers, not valid Tata 1mg or PharmEasy promo codes. "
+        "No real discount is applied to purchases."
+    )
+
+    wallet = api("GET", "/api/wallet")
+    balance = float(wallet.get("availableBalance", 0) or 0) if wallet else None
+    rewards = api("GET", "/api/rewards") or []
+    issued = api("GET", "/api/my-reward-redemptions") or []
+
+    shop_tab, coupons_tab = st.tabs(["🛍️ Coupon shop", "🎟️ My coupons"])
+    with shop_tab:
+        if balance is not None:
+            st.metric("Available MediCredits", f"{balance:,.0f} MC")
+        if not rewards:
+            st.info("No demo coupons are available yet. The shop catalogue may need to be seeded.")
+        else:
+            partner_filter = st.selectbox(
+                "Pharmacy app",
+                ["All apps", "Tata 1mg", "PharmEasy"],
+                key="shop_partner_filter",
+            )
+            visible = [
+                item for item in rewards
+                if partner_filter == "All apps" or item.get("partnerName") == partner_filter
+            ]
+            for reward in visible:
+                cost = float(reward.get("creditsRequired") or 0)
+                affordable = balance is not None and balance >= cost
+                with st.container(border=True):
+                    left, right = st.columns([3, 1], vertical_alignment="center")
+                    with left:
+                        st.markdown(f"**{reward.get('title', 'Demo coupon')}**")
+                        st.caption(reward.get("partnerName", "Pharmacy app"))
+                    with right:
+                        st.metric("Cost", f"{cost:,.0f} MC")
+                    st.write(reward.get("description") or "Simulated demo coupon.")
+                    if balance is not None and not affordable:
+                        st.caption(f"You need {cost - balance:,.0f} more MediCredits.")
+                    if st.button(
+                        "Redeem coupon",
+                        key=f"shop_redeem_{reward.get('rewardId')}",
+                        disabled=not affordable,
+                        type="primary" if affordable else "secondary",
+                        use_container_width=True,
+                    ):
+                        result = api(
+                            "POST",
+                            "/api/reward-redemptions",
+                            data={"rewardId": reward.get("rewardId")},
+                        )
+                        if result:
+                            redemption = result.get("redemption", {})
+                            st.session_state["shop_redeem_notice"] = (
+                                f"Demo coupon issued: {redemption.get('redemptionCode', '—')} · "
+                                f"{result.get('remainingBalance', '—')} MediCredits remaining."
+                            )
+                            st.rerun()
+
+    with coupons_tab:
+        if issued:
+            for coupon in issued:
+                with st.container(border=True):
+                    st.markdown(f"**{coupon.get('title', 'Demo coupon')}**")
+                    st.caption(f"{coupon.get('partnerName', 'Pharmacy app')} · {coupon.get('status', 'ISSUED')}")
+                    st.code(coupon.get("redemptionCode", ""), language=None)
+                    st.caption(
+                        f"Redeemed for {float(coupon.get('creditsUsed') or 0):,.0f} MediCredits"
+                    )
+                    st.caption("Internal demo code only — not accepted by the pharmacy app.")
+        else:
+            st.info("Your redeemed coupons will appear here.")
+
+    notice = st.session_state.pop("shop_redeem_notice", None)
+    if notice:
+        st.success(notice)
+
+
 def customer_profile():
     st.title('Profile & addresses')
     st.caption('Your personal details and saved collection addresses.')
@@ -1162,7 +1244,7 @@ WORKSPACE_COOKIE_DAYS = 365
 
 CUSTOMER_PAGES = [
     "Dashboard", "My Medicines", "Medicine Apps", "Returns",
-    "Wallet & rewards", "Profile & addresses", "Certificates", "Notifications",
+    "Wallet & rewards", "Shop", "Profile & addresses", "Certificates", "Notifications",
 ]
 WORKSPACE_PAGES = {
     "Customer": CUSTOMER_PAGES,
@@ -1352,6 +1434,8 @@ def main():
             customer_returns()
         elif page == "Wallet & rewards":
             customer_wallet()
+        elif page == "Shop":
+            customer_shop()
         elif page == "Profile & addresses":
             customer_profile()
         elif page == "Certificates":

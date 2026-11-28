@@ -1,0 +1,81 @@
+name: MediCycle seed demo shop coupons
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preview is read-only. Apply inserts missing simulated coupon offers."
+        required: true
+        type: choice
+        options:
+          - preview
+          - apply
+        default: preview
+
+permissions:
+  contents: read
+
+concurrency:
+  group: medicycle-demo-shop-coupons
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install database dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
+
+      - name: Validate database secrets
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          required = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"]
+          missing = [key for key in required if not os.getenv(key)]
+          if missing:
+              print("Missing GitHub Actions secrets: " + ", ".join(missing))
+              sys.exit(1)
+          if os.getenv("DB_NAME") != "medicycle":
+              print("Refusing to seed: DB_NAME must be exactly 'medicycle'.")
+              sys.exit(1)
+          print("Database secrets are present and target medicycle.")
+          PY
+
+      - name: Preview coupon seed (read-only)
+        if: inputs.mode == 'preview'
+        env:
+          PYTHONPATH: .
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python scripts/seed_demo_shop_coupons.py
+
+      - name: Apply coupon seed
+        if: inputs.mode == 'apply'
+        env:
+          PYTHONPATH: .
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python scripts/seed_demo_shop_coupons.py --apply

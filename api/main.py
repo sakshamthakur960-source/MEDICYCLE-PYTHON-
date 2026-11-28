@@ -919,6 +919,31 @@ def list_rewards(db: Session = Depends(get_db), user: User = Depends(get_current
     ).all()
 
 
+@app.get("/api/my-reward-redemptions")
+def my_reward_redemptions(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Return the authenticated customer's issued demo coupons and their offer details."""
+    rows = db.execute(
+        select(RewardRedemption, Reward)
+        .join(Reward, RewardRedemption.rewardId == Reward.rewardId)
+        .where(RewardRedemption.userId == user.userId)
+        .order_by(RewardRedemption.redeemedAt.desc())
+    ).all()
+    return [
+        {
+            "redemptionId": str(redemption.redemptionId),
+            "redemptionCode": redemption.redemptionCode,
+            "status": redemption.status,
+            "creditsUsed": str(redemption.creditsUsed),
+            "redeemedAt": redemption.redeemedAt.isoformat() if redemption.redeemedAt else None,
+            "expiresAt": redemption.expiresAt.isoformat() if redemption.expiresAt else None,
+            "title": reward.title,
+            "partnerName": reward.partnerName,
+            "description": reward.description,
+        }
+        for redemption, reward in rows
+    ]
+
+
 @app.get("/api/wallet/transactions")
 def wallet_transactions(limit: int = Query(default=20, ge=1, le=100), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     wallet = db.scalar(select(Wallet).where(Wallet.userId == user.userId))
