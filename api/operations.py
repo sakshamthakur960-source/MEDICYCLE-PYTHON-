@@ -8,7 +8,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models import (
@@ -137,7 +137,7 @@ def receive_return(return_id: UUID, payload: IntakeIn, db: Session = Depends(get
     if req is None: raise HTTPException(404, "Return not found")
     if req.returnMethod == "PHARMACY_DROPOFF" and req.facilityId != payload.facilityId:
         raise HTTPException(409, "Drop-off must be received at the selected facility")
-    if req.status not in {"SUBMITTED", "PICKED_UP", "IN_TRANSIT", "ARRIVED"}:
+    if req.status not in {"SUBMITTED", "VERIFIED", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "ARRIVED"}:
         raise HTTPException(409, f"Cannot intake a return in {req.status} state")
     intake = FacilityIntake(facilityId=payload.facilityId, returnId=return_id,
         receivedBy=user.userId, intakeStatus="RECEIVED", declaredQuantity=payload.declaredQuantity,
@@ -309,6 +309,65 @@ def return_tracking(return_id:UUID,db:Session=Depends(get_db),user:User=Depends(
     logs=[]
     if assignment: logs=db.scalars(select(TrackingLog).where(TrackingLog.assignmentId==assignment.assignmentId).order_by(TrackingLog.recordedAt.desc()).limit(50)).all()
     return {"return":req,"assignment":assignment,"tracking":logs}
+
+def auto_assign_pickup(db: Session, req: ReturnRequest):
+    """Assign the least-loaded verified, available driver to a verified doorstep return.
+
+    The caller owns the transaction. Driver rows are locked while selecting so
+    concurrent return submissions do not all select the same candidate blindly.
+    A vehicle is intentionally optional in the existing assignment model.
+    """
+    eligible = db.scalars(
+        select(Driver)
+        .where(
+            func.lower(Driver.verificationStatus).in_(["verified", "approved", "active"]),
+            func.lower(Driver.availabilityStatus).in_(["available"]),
+        )
+        .order_by(Driver.createdAt, Driver.driverId)
+        .with_for_update()
+    ).all()
+    if not eligible:
+        return None, None
+
+    ranked = []
+    for driver in eligible:
+        active_count = len(db.scalars(
+            select(PickupAssignment.assignmentId).where(
+                PickupAssignment.driverId == driver.driverId,
+                PickupAssignment.status.not_in(["CANCELLED", "COMPLETED"]),
+            )
+        ).all())
+        ranked.append((active_count, driver.createdAt, str(driver.driverId), driver))
+    driver = min(ranked, key=lambda row: row[:3])[3]
+
+    assignment = PickupAssignment(
+        returnId=req.returnId,
+        driverId=driver.driverId,
+        vehicleId=None,
+        routeId=None,
+        assignedAt=datetime.utcnow(),
+        status="ASSIGNED",
+    )
+    previous = req.status
+    req.status = "ASSIGNED"
+    db.add(assignment)
+    db.add(ReturnStatusHistory(
+        returnId=req.returnId,
+        previousStatus=previous,
+        newStatus="ASSIGNED",
+        changedBy=None,
+        changeReason="System automatically assigned the least-loaded verified available driver",
+    ))
+    db.add(Notification(
+        userId=req.userId,
+        notificationType="PICKUP_ASSIGNED",
+        title="Driver assigned",
+        message=f"{driver.fullName} has been assigned to collect your medicine return.",
+        relatedReturnId=req.returnId,
+        isRead=False,
+    ))
+    return assignment, driver
+
 
 class AssignmentIn(BaseModel):
     returnId: UUID
