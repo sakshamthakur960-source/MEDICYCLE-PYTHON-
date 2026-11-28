@@ -12,7 +12,7 @@ from models import (
     User, UserAddress, Medicine, MedicineBatch, UserMedicine, ReturnRequest,
     ReturnItem, ReturnBucketItem, PickupSlot, Wallet, WalletTransaction, Reward,
     RewardRedemption, DisposalCertificate, ReturnStatusHistory, Facility,
-    FacilityStaff, Driver, Notification,
+    FacilityStaff, Driver, PickupAssignment, Notification,
 )
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
@@ -716,6 +716,95 @@ def get_return(return_id: UUID, db: Session = Depends(get_db), user: User = Depe
     items = db.scalars(select(ReturnItem).where(ReturnItem.returnId == request.returnId)).all()
     history = db.scalars(select(ReturnStatusHistory).where(ReturnStatusHistory.returnId == request.returnId).order_by(ReturnStatusHistory.changedAt)).all()
     return {"return": request, "items": items, "history": history}
+
+
+@app.post("/api/returns/{return_id}/cancel")
+def cancel_return(return_id: UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Cancel a customer's not-yet-collected return and release its reserved pickup resources."""
+    request = db.scalar(
+        select(ReturnRequest)
+        .where(ReturnRequest.returnId == return_id)
+        .with_for_update()
+    )
+    if request is None or request.userId != user.userId:
+        raise HTTPException(status_code=404, detail="Return request not found")
+
+    cancellable_statuses = {"SUBMITTED", "VERIFIED", "ASSIGNED"}
+    if request.status.upper() not in cancellable_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This request can no longer be cancelled because it is {request.status.lower().replace('_', ' ')}",
+        )
+
+    assignment = db.scalar(
+        select(PickupAssignment)
+        .where(PickupAssignment.returnId == request.returnId)
+        .order_by(PickupAssignment.assignedAt.desc())
+        .with_for_update()
+    )
+    if assignment is not None and assignment.status.upper() not in {"ASSIGNED", "CANCELLED"}:
+        raise HTTPException(
+            status_code=409,
+            detail="The driver has already started processing this pickup; contact MediCycle support to cancel it.",
+        )
+
+    now = datetime.utcnow()
+    previous_status = request.status
+
+    if assignment is not None and assignment.status.upper() == "ASSIGNED":
+        assignment.status = "CANCELLED"
+        assignment.completedAt = now
+
+    if request.pickupSlotId is not None:
+        slot = db.scalar(
+            select(PickupSlot)
+            .where(PickupSlot.pickupSlotId == request.pickupSlotId)
+            .with_for_update()
+        )
+        if slot is not None:
+            slot.bookedCount = max(0, slot.bookedCount - 1)
+            if slot.slotDate >= date.today() and slot.bookedCount < slot.capacity:
+                slot.slotStatus = "AVAILABLE"
+
+    # Restore expired-medicine bucket rows submitted through the Return Bucket flow.
+    bucket_rows = db.scalars(
+        select(ReturnBucketItem)
+        .where(
+            ReturnBucketItem.userId == user.userId,
+            ReturnBucketItem.submittedReturnId == request.returnId,
+            ReturnBucketItem.status == "SUBMITTED",
+        )
+        .with_for_update()
+    ).all()
+    for bucket in bucket_rows:
+        bucket.status = "IN_BUCKET"
+        bucket.submittedReturnId = None
+
+    request.status = "CANCELLED"
+    request.completedAt = now
+    db.add(ReturnStatusHistory(
+        returnId=request.returnId,
+        previousStatus=previous_status,
+        newStatus="CANCELLED",
+        changedBy=user.userId,
+        changeReason="Customer cancelled the return request before pickup",
+    ))
+    db.add(Notification(
+        userId=user.userId,
+        notificationType="RETURN_CANCELLED",
+        title="Return request cancelled",
+        message="Your return request was cancelled. Its reserved pickup slot has been released.",
+        relatedReturnId=request.returnId,
+        isRead=False,
+    ))
+    db.commit()
+    return {
+        "returnId": str(request.returnId),
+        "status": request.status,
+        "releasedPickupSlot": request.pickupSlotId is not None,
+        "restoredReturnBucketItems": len(bucket_rows),
+        "message": "Return request cancelled successfully.",
+    }
 
 
 @app.get("/api/wallet")
