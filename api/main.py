@@ -12,7 +12,7 @@ from models import (
     User, UserAddress, Medicine, MedicineBatch, UserMedicine, ReturnRequest,
     ReturnItem, ReturnBucketItem, PickupSlot, Wallet, WalletTransaction, Reward,
     RewardRedemption, DisposalCertificate, ReturnStatusHistory, Facility,
-    FacilityStaff, Driver,
+    FacilityStaff, Driver, Notification,
 )
 from api.dependencies import get_db, get_current_user
 from api.schemas import (
@@ -582,25 +582,29 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
     if payload.returnMethod == "DOORSTEP_PICKUP":
         if payload.addressId is None:
             raise HTTPException(status_code=422, detail="A pickup address is required for doorstep pickup")
-        slot = db.scalar(
-            select(PickupSlot)
-            .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
-            .with_for_update()
-        )
-        if (
-            slot is None
-            or slot.slotStatus.lower() != "available"
-            or slot.bookedCount >= slot.capacity
-            or slot.slotDate < date.today()
-        ):
-            raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
-        slot_facility = db.get(Facility, slot.facilityId)
-        if (
-            slot_facility is None
-            or slot_facility.operatingStatus.lower() not in {"operational", "active"}
-            or slot_facility.authorizationStatus.lower() not in {"approved", "authorized"}
-        ):
-            raise HTTPException(status_code=409, detail="Pickup slot facility is unavailable")
+        if not payload.isDemo:
+            slot = db.scalar(
+                select(PickupSlot)
+                .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
+                .with_for_update()
+            )
+            if (
+                slot is None
+                or slot.slotStatus.lower() != "available"
+                or slot.bookedCount >= slot.capacity
+                or slot.slotDate < date.today()
+            ):
+                raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
+            slot_facility = db.get(Facility, slot.facilityId)
+            if (
+                slot_facility is None
+                or slot_facility.operatingStatus.lower() not in {"operational", "active"}
+                or slot_facility.authorizationStatus.lower() not in {"approved", "authorized"}
+            ):
+                raise HTTPException(status_code=409, detail="Pickup slot facility is unavailable")
+
+    if payload.isDemo and payload.returnMethod != "DOORSTEP_PICKUP":
+        raise HTTPException(status_code=422, detail="Demo requests currently support doorstep pickup only")
 
     if payload.returnMethod == "PHARMACY_DROPOFF":
         facility = db.get(Facility, payload.facilityId)
@@ -626,7 +630,7 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
         returnMethod=payload.returnMethod,
         pickupSlotId=payload.pickupSlotId,
         facilityId=slot.facilityId if slot is not None else payload.facilityId,
-        requestNotes=payload.requestNotes,
+        requestNotes=(("[DEMO REQUEST] " + payload.requestNotes.strip()) if payload.isDemo and payload.requestNotes and payload.requestNotes.strip() else ("[DEMO REQUEST]" if payload.isDemo else payload.requestNotes)),
         status="VERIFIED",
         verifiedAt=now,
     )
@@ -659,8 +663,17 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
 
     assignment = None
     assigned_driver = None
+    if payload.isDemo:
+        db.add(Notification(
+            userId=user.userId,
+            notificationType="MEDICINE_VERIFIED_DEMO",
+            title="Medicine verified",
+            message="Your demo medicine return request has passed the initial verification checks.",
+            relatedReturnId=request.returnId,
+            isRead=False,
+        ))
     if payload.returnMethod == "DOORSTEP_PICKUP":
-        assignment, assigned_driver = auto_assign_pickup(db, request)
+        assignment, assigned_driver = auto_assign_pickup(db, request, demo_mode=payload.isDemo)
 
     db.commit()
     db.refresh(request)
@@ -674,6 +687,8 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
         "returnMethod": request.returnMethod,
         "submittedItems": len(payload.items),
         "pickupAssigned": assignment is not None,
+        "isDemo": payload.isDemo,
+        "estimatedArrivalMinutes": 10 if payload.isDemo and assignment is not None else None,
         "assignment": {
             "status": assignment.status,
             "driverName": assigned_driver.fullName,

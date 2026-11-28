@@ -122,12 +122,13 @@ class ReturnCreateIn(BaseModel):
     pickupSlotId: UUID | None = None
     facilityId: UUID | None = None
     requestNotes: str | None = None
+    isDemo: bool = False
     items: list[ReturnItemIn] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_method_fields(self):
-        if self.returnMethod == "DOORSTEP_PICKUP" and self.pickupSlotId is None:
-            raise ValueError("A pickup slot is required for doorstep pickup")
+        if self.returnMethod == "DOORSTEP_PICKUP" and self.pickupSlotId is None and not self.isDemo:
+            raise ValueError("A pickup slot is required for standard doorstep pickup")
         if self.returnMethod == "PHARMACY_DROPOFF" and self.facilityId is None:
             raise ValueError("A drop-off facility is required for pharmacy drop-off")
         return self
