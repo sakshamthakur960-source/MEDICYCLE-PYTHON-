@@ -108,6 +108,7 @@ hr { border-color:#e2ece7 !important; }
 .mc-page-intro small { color:#13866f; font-size:.7rem; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }
 .mc-page-intro strong { display:block; margin-top:3px; color:#143b35; font-family:'Manrope',sans-serif; font-size:1.05rem; }
 .mc-page-intro span { color:#718780; font-size:.84rem; }
+.mc-profile-card { border:1px solid #dce9e4; border-radius:20px; background:linear-gradient(115deg,#fff 0%,#f0f8f4 100%); padding:20px; box-shadow:0 9px 28px rgba(20,59,53,.055); }
 @media(max-width:700px) {
  .block-container { padding-top:1.2rem; }
  [data-testid="stMetric"] { min-height:96px; padding:14px; }
@@ -622,30 +623,142 @@ def customer_wallet():
 
 def customer_profile():
     st.title('Profile & addresses')
-    profile = api('GET', '/api/users/me')
-    if profile:
-        with st.form('profile_update'):
-            name = st.text_input('Full name', value=profile.get('fullName') or '')
-            email = st.text_input('Email', value=profile.get('email') or '')
-            phone = st.text_input('Phone', value=profile.get('phone') or '')
-            save = st.form_submit_button('Save profile')
-        if save:
-            result = api('PATCH', '/api/users/me', data={'fullName': name, 'email': email or None, 'phone': phone or None})
-            if result: st.success('Profile updated.')
-    st.subheader('Saved addresses')
+    st.caption('Your personal details and saved collection addresses.')
+
+    profile = api('GET', '/api/users/me') or {}
     addresses = api('GET', '/api/users/me/addresses') or []
-    records_table(addresses)
-    with st.form('new_address'):
-        st.markdown('**Add address**')
-        address_line = st.text_input('Address line')
-        city = st.text_input('City')
-        state = st.text_input('State')
-        postal = st.text_input('Postal code')
-        default = st.checkbox('Set as default')
-        add = st.form_submit_button('Add address')
-    if add:
-        result = api('POST', '/api/users/me/addresses', data={'addressLine': address_line, 'city': city, 'state': state, 'postalCode': postal, 'isDefault': default})
-        if result: st.success('Address added.')
+    st.session_state.setdefault('profile_editor_open', False)
+    st.session_state.setdefault('address_editor_id', None)
+    st.session_state.setdefault('avatar_style', 'Male')
+
+    # Profile card: the avatar is a presentation choice only. Gender is not
+    # currently collected or stored in the MediCycle user schema.
+    with st.container(border=True):
+        avatar_col, details_col = st.columns([1, 5], vertical_alignment='center')
+        with avatar_col:
+            avatar = '👨🏻' if st.session_state.avatar_style == 'Male' else '👩🏻'
+            st.markdown(
+                f'<div style="width:88px;height:88px;border-radius:26px;display:grid;place-items:center;'
+                f'font-size:48px;background:linear-gradient(145deg,#e4f5ed,#ccebdd);'
+                f'box-shadow:0 8px 22px rgba(20,90,70,.10)">{avatar}</div>',
+                unsafe_allow_html=True,
+            )
+        with details_col:
+            st.markdown('<div class="mc-section-label">ACCOUNT PROFILE</div>', unsafe_allow_html=True)
+            st.markdown(f"### {profile.get('fullName') or 'Your name'}")
+            st.write(profile.get('email') or 'Email not added')
+            st.caption(profile.get('phone') or 'Phone number not added')
+        avatar_col, action_col = st.columns([3, 2])
+        with avatar_col:
+            st.selectbox('Profile illustration', ['Male', 'Female'], key='avatar_style',
+                         format_func=lambda value: 'Male avatar' if value == 'Male' else 'Female avatar')
+        with action_col:
+            st.write('')
+            if st.button('Edit profile  →', key='open_profile_editor', use_container_width=True):
+                st.session_state.profile_editor_open = not st.session_state.profile_editor_open
+                st.rerun()
+
+    if st.session_state.profile_editor_open:
+        with st.container(border=True):
+            st.subheader('Update profile')
+            with st.form('profile_update'):
+                name = st.text_input('Full name', value=profile.get('fullName') or '')
+                email = st.text_input('Email', value=profile.get('email') or '')
+                phone = st.text_input('Phone', value=profile.get('phone') or '')
+                save_col, cancel_col = st.columns(2)
+                with save_col:
+                    save = st.form_submit_button('Save changes', type='primary', use_container_width=True)
+                with cancel_col:
+                    cancel = st.form_submit_button('Cancel', use_container_width=True)
+            if save:
+                result = api('PATCH', '/api/users/me', data={
+                    'fullName': name.strip(), 'email': email.strip() or None, 'phone': phone.strip() or None
+                })
+                if result:
+                    st.session_state.profile_editor_open = False
+                    st.success('Profile updated successfully.')
+                    st.rerun()
+            if cancel:
+                st.session_state.profile_editor_open = False
+                st.rerun()
+
+    st.divider()
+    heading_col, add_col = st.columns([3, 1], vertical_alignment='center')
+    with heading_col:
+        st.subheader('Saved addresses')
+        st.caption('Choose an address to edit it or add another collection location.')
+    with add_col:
+        if st.button('+ Add address', key='open_new_address', type='primary', use_container_width=True):
+            st.session_state.address_editor_id = 'new'
+            st.rerun()
+
+    if addresses:
+        for index, address in enumerate(addresses):
+            label = address.get('addressLabel') or ('Home' if index == 0 else f'Address {index + 1}')
+            with st.container(border=True):
+                top_col, badge_col = st.columns([4, 1], vertical_alignment='center')
+                with top_col:
+                    st.markdown(f"**📍 {label}**")
+                    st.write(address.get('addressLine') or '')
+                    locality = ', '.join(part for part in [
+                        address.get('city'), address.get('state')
+                    ] if part)
+                    st.caption(f"{locality} – {address.get('postalCode') or ''}")
+                    if address.get('landmark'):
+                        st.caption(f"Landmark: {address.get('landmark')}")
+                with badge_col:
+                    if address.get('isDefault'):
+                        st.success('Default')
+                if st.button('View / update address  →', key=f"edit_address_{address.get('addressId')}",
+                             use_container_width=True):
+                    st.session_state.address_editor_id = str(address.get('addressId'))
+                    st.rerun()
+    else:
+        with st.container(border=True):
+            st.info('No saved addresses yet. Add an address for doorstep medicine collection.')
+
+    selected_address = next(
+        (item for item in addresses if str(item.get('addressId')) == st.session_state.address_editor_id),
+        None,
+    )
+    if st.session_state.address_editor_id == 'new' or selected_address:
+        editing = selected_address or {}
+        is_new = st.session_state.address_editor_id == 'new'
+        with st.container(border=True):
+            st.subheader('Add a new address' if is_new else 'Update saved address')
+            with st.form('address_editor_form'):
+                address_label = st.text_input('Address label', value=editing.get('addressLabel') or '', placeholder='Home, Work, etc.')
+                address_line = st.text_input('Address line', value=editing.get('addressLine') or '')
+                city = st.text_input('City', value=editing.get('city') or '')
+                state = st.text_input('State', value=editing.get('state') or '')
+                postal = st.text_input('Postal code', value=editing.get('postalCode') or '')
+                landmark = st.text_input('Landmark (optional)', value=editing.get('landmark') or '')
+                default = st.checkbox('Set as default address', value=bool(editing.get('isDefault')))
+                save_col, cancel_col = st.columns(2)
+                with save_col:
+                    save_address = st.form_submit_button('Save address', type='primary', use_container_width=True)
+                with cancel_col:
+                    cancel_address = st.form_submit_button('Cancel', use_container_width=True)
+            if save_address:
+                payload = {
+                    'addressLabel': address_label.strip() or None,
+                    'addressLine': address_line.strip(), 'city': city.strip(),
+                    'state': state.strip(), 'postalCode': postal.strip(),
+                    'landmark': landmark.strip() or None,
+                    'isDefault': default,
+                    'latitude': editing.get('latitude'), 'longitude': editing.get('longitude'),
+                }
+                if is_new:
+                    result = api('POST', '/api/users/me/addresses', data=payload)
+                else:
+                    result = api('PATCH', f"/api/users/me/addresses/{st.session_state.address_editor_id}", data=payload)
+                if result:
+                    st.session_state.address_editor_id = None
+                    st.success('Address added.' if is_new else 'Address updated.')
+                    st.rerun()
+            if cancel_address:
+                st.session_state.address_editor_id = None
+                st.rerun()
 
 
 def staff_workspace():
