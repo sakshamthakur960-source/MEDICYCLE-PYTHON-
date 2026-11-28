@@ -641,6 +641,7 @@ def customer_returns():
                     "RECEIVED": "Received by facility",
                     "COMPLETED": "Completed",
                     "SUBMITTED": "Submitted",
+                    "CANCELLED": "Cancelled",
                 }
                 method_label = "Doorstep pickup" if record.get("returnMethod") == "DOORSTEP_PICKUP" else "Facility drop-off"
                 with st.container(border=True):
@@ -654,6 +655,24 @@ def customer_returns():
                     if right.button("View details", key=f"view_return_{record.get('returnId')}"):
                         st.session_state["selected_return_detail"] = record.get("returnId")
                         st.rerun()
+                    if status_value in {"SUBMITTED", "VERIFIED", "ASSIGNED"}:
+                        if right.button("Cancel request", key=f"cancel_return_{record.get('returnId')}"):
+                            st.session_state["confirm_cancel_return_id"] = record.get("returnId")
+                            st.rerun()
+
+        pending_cancel_id = st.session_state.get("confirm_cancel_return_id")
+        if pending_cancel_id:
+            st.warning("Cancel this return request? The pickup reservation will be released. This action cannot be undone.")
+            confirm_col, keep_col = st.columns(2)
+            if confirm_col.button("Yes, cancel request", type="primary", key="confirm_cancel_return"):
+                result = api("POST", f"/api/returns/{pending_cancel_id}/cancel")
+                if result:
+                    st.session_state.pop("confirm_cancel_return_id", None)
+                    st.success(result.get("message", "Return request cancelled."))
+                    st.rerun()
+            if keep_col.button("Keep request", key="keep_return_request"):
+                st.session_state.pop("confirm_cancel_return_id", None)
+                st.rerun()
 
         selected_return_id = st.session_state.get("selected_return_detail")
         if selected_return_id:
