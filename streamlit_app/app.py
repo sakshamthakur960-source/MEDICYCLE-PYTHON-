@@ -134,7 +134,7 @@ def error_message(response) -> str:
     return f'The request could not be completed (HTTP {response.status_code}). Please try again.'
 
 
-def api(method: str, path: str, *, data=None, params=None, auth=True):
+def api(method: str, path: str, *, data=None, params=None, auth=True, quiet=False):
     headers = {}
     token = st.session_state.get('token')
     if auth and token:
@@ -159,6 +159,8 @@ def api(method: str, path: str, *, data=None, params=None, auth=True):
             st.session_state['_clear_auth_cookie'] = True
             st.session_state['session_notice'] = 'Your session has expired. Please sign in again.'
             st.rerun()
+        if quiet:
+            return None
         st.error(error_message(response))
         return None
 
@@ -902,9 +904,83 @@ def driver_workspace():
             if result: st.success('Location update submitted.')
 
 
+WORKSPACE_COOKIE_NAME = "medicycle_active_workspace"
+WORKSPACE_COOKIE_DAYS = 365
+
+CUSTOMER_PAGES = [
+    "Dashboard", "My Medicines", "Medicine Apps", "Returns",
+    "Wallet & rewards", "Profile & addresses", "Certificates", "Notifications",
+]
+WORKSPACE_PAGES = {
+    "Customer": CUSTOMER_PAGES,
+    "Driver": ["Operations"],
+    "Facility": ["Operations"],
+}
+WORKSPACE_DESCRIPTIONS = {
+    "Customer": "Manage medicines, returns, collection addresses and MediCredits.",
+    "Driver": "Manage assigned pickups, collection status and location updates.",
+    "Facility": "Receive returns, inspect medicines, manage storage and disposal.",
+}
+
+
+def discover_workspaces() -> list[str]:
+    """Discover operational memberships without showing expected 403 responses to other roles.
+
+    Customer is the base account workspace in the current schema. Driver and facility
+    access are derived from the existing Driver and FacilityStaff relationships.
+    """
+    available = ["Customer"]
+    driver_profile = api("GET", "/api/driver/me", quiet=True)
+    if driver_profile:
+        available.append("Driver")
+    staff_memberships = api("GET", "/api/staff/me", quiet=True)
+    if staff_memberships:
+        available.append("Facility")
+    return available
+
+
+def persist_workspace_preference(cookie_manager, workspace: str) -> None:
+    """Persist only the workspace preference; authorization is rechecked on every run."""
+    expires_at = datetime.now(timezone.utc) + timedelta(days=WORKSPACE_COOKIE_DAYS)
+    cookie_manager.set(
+        WORKSPACE_COOKIE_NAME,
+        workspace,
+        key="medicycle_set_workspace",
+        path="/",
+        expires_at=expires_at,
+        max_age=WORKSPACE_COOKIE_DAYS * 24 * 60 * 60,
+        secure=True,
+        same_site="strict",
+    )
+
+
+def workspace_settings(available_workspaces: list[str], active_workspace: str, cookie_manager) -> None:
+    st.title("Settings")
+    st.caption("Manage your MediCycle workspace preferences.")
+    with st.container(border=True):
+        st.subheader("Workspace")
+        st.write(f"Current workspace: **{active_workspace}**")
+        st.caption("Each workspace has its own navigation and operational tasks.")
+        if len(available_workspaces) == 1:
+            st.info("Only the Customer Workspace is currently linked to this account. Driver and Facility workspaces appear after an administrator links the relevant operational profile.")
+            return
+        selected_workspace = st.selectbox(
+            "Switch workspace",
+            available_workspaces,
+            index=available_workspaces.index(active_workspace),
+            key="settings_workspace_choice",
+        )
+        if st.button("Switch workspace", type="primary", use_container_width=True):
+            if selected_workspace != active_workspace:
+                st.session_state["active_workspace"] = selected_workspace
+                persist_workspace_preference(cookie_manager, selected_workspace)
+                st.rerun()
+            else:
+                st.success(f"{selected_workspace} Workspace is already active.")
+
+
 def main():
-    # Streamlit session_state is reset by a browser refresh. Restore the
-    # short-lived API token from a browser cookie and rehydrate the user profile.
+    # Restore authentication and workspace preference from separate cookies.
     cookie_manager = stx.CookieManager(key="medicycle_auth_cookie_manager")
     if st.session_state.pop("_clear_auth_cookie", False):
         if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
@@ -918,40 +994,89 @@ def main():
             if profile:
                 st.session_state["user"] = profile
 
-    if not st.session_state.get('token'):
-        notice = st.session_state.pop('session_notice', None)
+    if not st.session_state.get("token"):
+        notice = st.session_state.pop("session_notice", None)
         if notice:
             st.warning(notice)
         login_screen(cookie_manager)
         return
-    user = st.session_state.get('user') or {}
+
+    user = st.session_state.get("user") or {}
+    available_workspaces = discover_workspaces()
+
+    # A saved preference never grants access: stale or unauthorised choices fall
+    # back to Customer after live role discovery.
+    saved_workspace = (cookie_manager.cookies or {}).get(WORKSPACE_COOKIE_NAME)
+    if "active_workspace" not in st.session_state:
+        st.session_state["active_workspace"] = (
+            saved_workspace if saved_workspace in available_workspaces else "Customer"
+        )
+    if st.session_state["active_workspace"] not in available_workspaces:
+        st.session_state["active_workspace"] = "Customer"
+        persist_workspace_preference(cookie_manager, "Customer")
+
+    active_workspace = st.session_state["active_workspace"]
+    navigation = [*WORKSPACE_PAGES[active_workspace], "Settings"]
+
     with st.sidebar:
-        st.markdown('<div class="mc-brand"><div class="mc-mark" style="width:38px;height:38px;font-size:20px;border-radius:12px">♻</div><strong style="font-family:Manrope,sans-serif;font-size:1.25rem;color:#143b35">MediCycle</strong></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mc-brand"><div class="mc-mark" style="width:38px;height:38px;font-size:20px;border-radius:12px">♻</div>'
+            '<strong style="font-family:Manrope,sans-serif;font-size:1.25rem;color:#143b35">MediCycle</strong></div>',
+            unsafe_allow_html=True,
+        )
         st.caption(f"Signed in as {user.get('fullName', 'User')}")
-        page = st.radio('Workspace', ['Dashboard', 'My Medicines', 'Medicine Apps', 'Returns', 'Wallet & rewards', 'Profile & addresses', 'Facility operations', 'Driver workspace', 'Certificates', 'Notifications'])
-        if st.button('Sign out', use_container_width=True):
-            if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
-                cookie_manager.delete(AUTH_COOKIE_NAME, key='medicycle_logout_auth')
-            st.session_state.clear(); refresh()
         st.divider()
-        st.caption(f'API: {API_BASE}')
+        st.markdown("**" + active_workspace + " Workspace**")
+        page = st.radio(
+            "Navigation",
+            navigation,
+            key=f"navigation_{active_workspace.lower()}",
+            label_visibility="collapsed",
+        )
+        st.divider()
+        st.caption(f"API: {API_BASE}")
+        if st.button("Sign out", use_container_width=True):
+            if AUTH_COOKIE_NAME in (cookie_manager.cookies or {}):
+                cookie_manager.delete(AUTH_COOKIE_NAME, key="medicycle_logout_auth")
+            if WORKSPACE_COOKIE_NAME in (cookie_manager.cookies or {}):
+                cookie_manager.delete(WORKSPACE_COOKIE_NAME, key="medicycle_logout_workspace")
+            st.session_state.clear()
+            refresh()
+
+    if page == "Settings":
+        workspace_settings(available_workspaces, active_workspace, cookie_manager)
+        return
+
     st.markdown(
-        '<div class="mc-page-intro"><div><small>MEDICYCLE WORKSPACE</small>'
+        '<div class="mc-page-intro"><div><small>' + active_workspace.upper() + ' WORKSPACE</small>'
         '<strong>Care, collected responsibly.</strong>'
-        '<span>Your medicine returns and reverse-logistics workspace</span></div>'
+        '<span>' + WORKSPACE_DESCRIPTIONS[active_workspace] + '</span></div>'
         '<span>♻ &nbsp; Responsible returns</span></div>',
         unsafe_allow_html=True,
     )
-    if page == 'Dashboard': customer_dashboard()
-    elif page == 'My Medicines': customer_my_medicines()
-    elif page == 'Medicine Apps': customer_medicine_apps()
-    elif page == 'Returns': customer_returns()
-    elif page == 'Wallet & rewards': customer_wallet()
-    elif page == 'Profile & addresses': customer_profile()
-    elif page == 'Facility operations': staff_workspace()
-    elif page == 'Driver workspace': driver_workspace()
-    elif page == 'Certificates': records_table(api('GET', '/api/certificates') or [], 'Disposal certificates')
-    elif page == 'Notifications': records_table(api('GET', '/api/notifications') or [], 'Notifications')
+
+    if active_workspace == "Customer":
+        if page == "Dashboard":
+            customer_dashboard()
+        elif page == "My Medicines":
+            customer_my_medicines()
+        elif page == "Medicine Apps":
+            customer_medicine_apps()
+        elif page == "Returns":
+            customer_returns()
+        elif page == "Wallet & rewards":
+            customer_wallet()
+        elif page == "Profile & addresses":
+            customer_profile()
+        elif page == "Certificates":
+            records_table(api("GET", "/api/certificates") or [], "Disposal certificates")
+        elif page == "Notifications":
+            records_table(api("GET", "/api/notifications") or [], "Notifications")
+    elif active_workspace == "Driver":
+        driver_workspace()
+    elif active_workspace == "Facility":
+        staff_workspace()
+
 
 if __name__ == '__main__':
     main()
