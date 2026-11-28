@@ -30,6 +30,45 @@ def test_rewards_list_hides_expired(client, db):
     assert titles == {"Future"}
 
 
+def test_demo_shop_coupons_are_listed_for_both_pharmacy_apps(client, db):
+    headers, _ = register(client)
+    for partner in ("Tata 1mg", "PharmEasy"):
+        make_reward(
+            db,
+            title=f"{partner} Demo Coupon - ₹20 off",
+            credits="100.00",
+        )
+        db.query(models.Reward).filter(
+            models.Reward.partnerName == "Test Partner",
+            models.Reward.title == f"{partner} Demo Coupon - ₹20 off",
+        ).update({models.Reward.partnerName: partner})
+    response = client.get("/api/rewards", headers=headers)
+    assert response.status_code == 200
+    offers = {(row["partnerName"], row["creditsRequired"]) for row in response.json()}
+    assert ("Tata 1mg", "100.00") in offers
+    assert ("PharmEasy", "100.00") in offers
+
+
+def test_customer_can_view_only_their_issued_demo_coupons(client, db):
+    h1, _ = register(client, "shop-a@example.com")
+    h2, _ = register(client, "shop-b@example.com")
+    reward = make_reward(db, title="Tata 1mg Demo Coupon - ₹20 off", credits="100.00")
+    redeemed = client.post(
+        "/api/reward-redemptions",
+        json={"rewardId": str(reward.rewardId)},
+        headers=h1,
+    )
+    assert redeemed.status_code == 201
+    own = client.get("/api/my-reward-redemptions", headers=h1)
+    other = client.get("/api/my-reward-redemptions", headers=h2)
+    assert own.status_code == 200
+    assert len(own.json()) == 1
+    assert own.json()[0]["redemptionCode"] == redeemed.json()["redemption"]["redemptionCode"]
+    assert own.json()[0]["partnerName"] == "Test Partner"
+    assert other.status_code == 200
+    assert other.json() == []
+
+
 # ---------- welcome bonus (precondition for redemption) ----------
 
 def test_registration_creates_100_credit_welcome_with_ledger(client, db):
