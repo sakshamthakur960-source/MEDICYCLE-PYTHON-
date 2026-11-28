@@ -366,17 +366,66 @@ def customer_recent_returns(records):
 
 
 def customer_dashboard():
-    st.title('Customer dashboard')
+    """Customer overview: presentation-only redesign using existing read endpoints."""
     profile = api('GET', '/api/users/me')
     wallet = api('GET', '/api/wallet')
     returns = api('GET', '/api/returns')
-    c1, c2, c3 = st.columns(3)
-    c1.metric('MediCredits', wallet.get('availableBalance', '—') if wallet else '—')
-    c2.metric('Return requests', len(returns) if isinstance(returns, list) else '—')
-    c3.metric('Account', profile.get('accountStatus', '—') if profile else '—')
-    st.markdown('#### Your recent returns')
-    customer_recent_returns(returns if isinstance(returns, list) else [])
-    st.info('Credits are added only after the facility physically receives and verifies an entire return request.')
+    returns = returns if isinstance(returns, list) else []
+
+    first_name = str((profile or {}).get('fullName') or 'there').strip().split(' ')[0]
+    balance = (wallet or {}).get('availableBalance', '—')
+    active_statuses = {'SUBMITTED', 'VERIFIED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED', 'RECEIVED'}
+    completed_count = sum(str(item.get('status') or '').upper() == 'COMPLETED' for item in returns)
+    active_count = sum(str(item.get('status') or '').upper() in active_statuses for item in returns)
+
+    st.markdown(
+        '<section style="padding:28px 30px;border-radius:22px;background:linear-gradient(115deg,#103f36 0%,#08765f 65%,#19a17e 100%);'
+        'box-shadow:0 16px 36px rgba(13,83,67,.16);margin:0 0 22px;color:#fff">'
+        '<div style="font-size:.72rem;letter-spacing:.15em;text-transform:uppercase;font-weight:800;color:#b8ead8">CUSTOMER OVERVIEW</div>'
+        '<div style="font-family:Manrope,sans-serif;font-size:clamp(1.65rem,3vw,2.35rem);font-weight:800;letter-spacing:-.045em;margin:8px 0 5px;color:#fff">'
+        'Welcome back, ' + first_name + '.</div>'
+        '<div style="font-size:.95rem;color:#d7f1e7;max-width:650px;line-height:1.65">'
+        'Your medicine returns, collection activity and MediCredits — all in one place.</div>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('#### Your activity at a glance')
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric('MediCredits', balance, help='Your currently available reward balance.')
+    k2.metric('Return requests', len(returns))
+    k3.metric('In progress', active_count)
+    k4.metric('Completed', completed_count)
+
+    left, right = st.columns([1.35, 1], gap='large')
+    with left:
+        st.markdown('#### Recent returns')
+        customer_recent_returns(returns)
+    with right:
+        with st.container(border=True):
+            st.markdown('#### Return journey')
+            st.caption('Follow the progress of your medicine returns.')
+            stages = [
+                ('Submitted', 'SUBMITTED'),
+                ('Verified', 'VERIFIED'),
+                ('Collected / in transit', 'IN_TRANSIT'),
+                ('Received', 'RECEIVED'),
+                ('Completed', 'COMPLETED'),
+            ]
+            if returns:
+                statuses = [str(item.get('status') or '').upper() for item in returns]
+                for label, status in stages:
+                    count = sum(value == status for value in statuses)
+                    st.write(f'**{label}**')
+                    st.progress(min(count / max(len(returns), 1), 1.0), text=f'{count} request(s)')
+            else:
+                st.info('Your return activity will appear here after you submit your first request.')
+            st.divider()
+            st.markdown('**MediCredits tip**')
+            st.caption('Credits are added only after the facility physically receives and verifies an entire return request.')
+
+    if profile and profile.get('accountStatus'):
+        st.caption(f"Account status: {str(profile.get('accountStatus')).replace('_', ' ').title()}")
 
 
 def customer_my_medicines():
