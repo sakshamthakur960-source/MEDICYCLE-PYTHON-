@@ -572,38 +572,67 @@ def list_pickup_slots(facility_id: UUID | None = None, db: Session = Depends(get
 
 @app.post("/api/returns", status_code=201)
 def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Validate a customer return, then automatically assign a driver for doorstep pickup."""
     if payload.addressId is not None:
         address = db.get(UserAddress, payload.addressId)
         if address is None or address.userId != user.userId:
             raise HTTPException(status_code=404, detail="Address not found for this user")
+
+    slot = None
     if payload.returnMethod == "DOORSTEP_PICKUP":
         if payload.addressId is None:
             raise HTTPException(status_code=422, detail="A pickup address is required for doorstep pickup")
-        slot = db.get(PickupSlot, payload.pickupSlotId)
-        if slot is None or slot.slotStatus.lower() not in {"available"} or slot.bookedCount >= slot.capacity:
+        slot = db.scalar(
+            select(PickupSlot)
+            .where(PickupSlot.pickupSlotId == payload.pickupSlotId)
+            .with_for_update()
+        )
+        if (
+            slot is None
+            or slot.slotStatus.lower() != "available"
+            or slot.bookedCount >= slot.capacity
+            or slot.slotDate < date.today()
+        ):
             raise HTTPException(status_code=409, detail="Pickup slot is unavailable")
+        slot_facility = db.get(Facility, slot.facilityId)
+        if (
+            slot_facility is None
+            or slot_facility.operatingStatus.lower() not in {"operational", "active"}
+            or slot_facility.authorizationStatus.lower() not in {"approved", "authorized"}
+        ):
+            raise HTTPException(status_code=409, detail="Pickup slot facility is unavailable")
+
     if payload.returnMethod == "PHARMACY_DROPOFF":
         facility = db.get(Facility, payload.facilityId)
-        if facility is None or facility.operatingStatus.lower() not in {"operational", "active"} or facility.authorizationStatus.lower() not in {"approved", "authorized"}:
+        if (
+            facility is None
+            or facility.operatingStatus.lower() not in {"operational", "active"}
+            or facility.authorizationStatus.lower() not in {"approved", "authorized"}
+        ):
             raise HTTPException(status_code=404, detail="Drop-off facility is unavailable")
+
     for item in payload.items:
         if db.get(Medicine, item.medicineId) is None:
-            raise HTTPException(status_code=404, detail=f"Medicine not found: {item.medicineId}")
+            raise HTTPException(status_code=404, detail="One of the selected medicines is no longer available")
         if item.batchId:
             batch = db.get(MedicineBatch, item.batchId)
             if batch is None or batch.medicineId != item.medicineId:
-                raise HTTPException(status_code=422, detail="Medicine batch mismatch")
+                raise HTTPException(status_code=422, detail="A selected medicine batch does not match its medicine")
+
+    now = datetime.utcnow()
     request = ReturnRequest(
         userId=user.userId,
         addressId=payload.addressId,
         returnMethod=payload.returnMethod,
         pickupSlotId=payload.pickupSlotId,
-        facilityId=payload.facilityId,
+        facilityId=slot.facilityId if slot is not None else payload.facilityId,
         requestNotes=payload.requestNotes,
-        status="SUBMITTED",
+        status="VERIFIED",
+        verifiedAt=now,
     )
     db.add(request)
     db.flush()
+
     for item in payload.items:
         db.add(ReturnItem(
             returnId=request.returnId,
@@ -614,14 +643,49 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
             inspectionStatus="PENDING",
             creditsAwarded=Decimal("0.00"),
         ))
-    if payload.returnMethod == "DOORSTEP_PICKUP":
+
+    if slot is not None:
         slot.bookedCount += 1
         if slot.bookedCount >= slot.capacity:
             slot.slotStatus = "FULL"
-    db.add(ReturnStatusHistory(returnId=request.returnId, previousStatus=None, newStatus="SUBMITTED", changeReason="Customer submitted return request"))
+
+    db.add(ReturnStatusHistory(
+        returnId=request.returnId,
+        previousStatus=None,
+        newStatus="VERIFIED",
+        changedBy=user.userId,
+        changeReason="Customer return request passed initial validation",
+    ))
+
+    assignment = None
+    assigned_driver = None
+    if payload.returnMethod == "DOORSTEP_PICKUP":
+        assignment, assigned_driver = auto_assign_pickup(db, request)
+
     db.commit()
     db.refresh(request)
-    return {"return": request, "items": db.scalars(select(ReturnItem).where(ReturnItem.returnId == request.returnId)).all()}
+    if assignment is not None:
+        db.refresh(assignment)
+
+    return {
+        "returnId": str(request.returnId),
+        "status": request.status,
+        "verificationStatus": "VERIFIED",
+        "returnMethod": request.returnMethod,
+        "submittedItems": len(payload.items),
+        "pickupAssigned": assignment is not None,
+        "assignment": {
+            "status": assignment.status,
+            "driverName": assigned_driver.fullName,
+        } if assignment is not None else None,
+        "message": (
+            "Your request is verified and a driver has been assigned."
+            if assignment is not None
+            else "Your request is verified. We are waiting for an available driver."
+            if payload.returnMethod == "DOORSTEP_PICKUP"
+            else "Your request is verified. You can drop it off at the selected facility."
+        ),
+    }
 
 
 @app.get("/api/returns")
@@ -701,6 +765,6 @@ def redeem_reward(payload: RewardRedemptionIn, db: Session = Depends(get_db), us
 
 
 # Operational APIs are kept in a separate router so the customer-facing API remains focused.
-from api.operations import router as operations_router
+from api.operations import router as operations_router, auto_assign_pickup
 
 app.include_router(operations_router)
