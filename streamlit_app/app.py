@@ -671,10 +671,12 @@ def customer_medicine_apps():
             else:
                 st.info(f"No {source_label} purchases have been recorded yet. Use the form above to add prototype data.")
 
-@st.fragment(run_every="15s")
 def customer_returns():
     st.title("Medicine returns")
     st.caption("Request a safe collection for your medicines and follow its progress.")
+    refresh_col, _ = st.columns([1, 5])
+    if refresh_col.button("↻ Refresh status", key="refresh_returns_status"):
+        st.rerun()
 
     confirmation = st.session_state.get("return_confirmation")
     if confirmation:
