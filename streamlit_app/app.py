@@ -440,6 +440,8 @@ def customer_returns():
     if confirmation:
         with st.container(border=True):
             st.success("Your return request has been verified")
+            if confirmation.get("isDemo"):
+                st.info("DEMO REQUEST · Simulated pickup workflow")
             st.markdown("### Request confirmed")
             st.write(confirmation.get("message") or "Your request passed the initial checks.")
             c1, c2 = st.columns(2)
@@ -453,6 +455,8 @@ def customer_returns():
             assignment = confirmation.get("assignment") or {}
             if assignment.get("driverName"):
                 st.info(f"Your pickup driver is **{assignment['driverName']}**.")
+                if confirmation.get("isDemo"):
+                    st.success("Your demo driver is expected at your location in about 10 minutes.")
             elif confirmation.get("returnMethod") == "DOORSTEP_PICKUP":
                 st.warning("Your request is verified. We are finding an available driver and will update the assignment shortly.")
             else:
@@ -470,12 +474,22 @@ def customer_returns():
 
         st.markdown("#### 1. Choose how to return")
         with st.form("return_form"):
-            method = st.radio(
-                "Return method",
-                ["DOORSTEP_PICKUP", "PHARMACY_DROPOFF"],
-                format_func=lambda x: "Doorstep pickup" if x == "DOORSTEP_PICKUP" else "Drop off at a facility",
+            request_mode = st.radio(
+                "Request type",
+                ["STANDARD", "DEMO"],
+                format_func=lambda x: "Standard request" if x == "STANDARD" else "Demo request (simulated 10-minute pickup)",
                 horizontal=True,
             )
+            if request_mode == "DEMO":
+                method = "DOORSTEP_PICKUP"
+                st.info("Demo mode uses a dedicated demo driver and does not reserve a real pickup slot.")
+            else:
+                method = st.radio(
+                    "Return method",
+                    ["DOORSTEP_PICKUP", "PHARMACY_DROPOFF"],
+                    format_func=lambda x: "Doorstep pickup" if x == "DOORSTEP_PICKUP" else "Drop off at a facility",
+                    horizontal=True,
+                )
 
             address_map = {}
             for index, address in enumerate(addresses, start=1):
@@ -518,7 +532,9 @@ def customer_returns():
                     address_choice = st.selectbox("Pickup address", list(address_map))
                 else:
                     st.warning("Add a saved pickup address in Profile & addresses before requesting collection.")
-                if slot_map:
+                if request_mode == "DEMO":
+                    st.caption("Demo courier arrival estimate: about 10 minutes (simulated).")
+                elif slot_map:
                     slot_choice = st.selectbox("Preferred pickup window", list(slot_map))
                 else:
                     st.warning("There are currently no available pickup windows.")
@@ -586,14 +602,15 @@ def customer_returns():
         if submit:
             if any(not item.get("medicineId") for item in selected_items):
                 st.error("Please select a medicine for every entry.")
-            elif method == "DOORSTEP_PICKUP" and (not address_choice or not slot_choice):
-                st.error("A saved pickup address and available pickup window are required.")
+            elif method == "DOORSTEP_PICKUP" and (not address_choice or (request_mode != "DEMO" and not slot_choice)):
+                st.error("A saved pickup address and the required pickup window are required.")
             elif method == "PHARMACY_DROPOFF" and not facility_choice:
                 st.error("Please select an operational drop-off facility.")
             else:
                 payload = {
                     "addressId": address_map.get(address_choice) if address_choice else None,
                     "returnMethod": method,
+                    "isDemo": request_mode == "DEMO",
                     "pickupSlotId": slot_map.get(slot_choice) if slot_choice else None,
                     "facilityId": facility_map.get(facility_choice) if facility_choice else None,
                     "requestNotes": notes.strip() or None,
