@@ -703,9 +703,96 @@ def create_return(payload: ReturnCreateIn, db: Session = Depends(get_db), user: 
     }
 
 
+def _complete_demo_return(db: Session, request: ReturnRequest, *, force: bool = False):
+    """Complete a demo return once, award 10 credits per medicine unit, and commit atomically."""
+    if not (request.requestNotes or "").startswith("[DEMO REQUEST]"):
+        raise HTTPException(status_code=409, detail="This is not a demo request")
+    existing_credit = db.scalar(select(WalletTransaction).where(
+        WalletTransaction.returnId == request.returnId,
+        WalletTransaction.transactionType == "CREDIT",
+        WalletTransaction.description == "Demo request completion reward (10 credits per medicine unit)",
+    ))
+    if request.status.upper() == "COMPLETED":
+        return {"returnId": str(request.returnId), "status": "COMPLETED",
+                "creditsAwarded": str(existing_credit.amount if existing_credit else Decimal("0.00")),
+                "alreadyCompleted": True}
+    if request.status.upper() in {"CANCELLED", "REJECTED"}:
+        raise HTTPException(status_code=409, detail=f"Cannot complete a demo request in {request.status.lower()} state")
+    now = datetime.utcnow()
+    created_at = request.createdAt.replace(tzinfo=None) if request.createdAt.tzinfo is not None else request.createdAt
+    if not force and now < created_at + timedelta(minutes=10):
+        seconds_left = max(0, int((created_at + timedelta(minutes=10) - now).total_seconds()))
+        return {"returnId": str(request.returnId), "status": request.status,
+                "completed": False, "secondsRemaining": seconds_left}
+    wallet = db.scalar(select(Wallet).where(Wallet.userId == request.userId).with_for_update())
+    if wallet is None:
+        raise HTTPException(status_code=409, detail="Customer wallet does not exist")
+    items = db.scalars(select(ReturnItem).where(ReturnItem.returnId == request.returnId).with_for_update()).all()
+    total_units = sum(int(item.quantity or 0) for item in items)
+    total_credits = Decimal(total_units * 10)
+    for item in items:
+        item.creditsAwarded = Decimal(int(item.quantity or 0) * 10)
+    if existing_credit is None and total_credits > 0:
+        wallet.availableBalance += total_credits
+        wallet.updatedAt = now
+        db.add(WalletTransaction(
+            walletId=wallet.walletId, returnId=request.returnId, transactionType="CREDIT",
+            amount=total_credits, referenceCode=f"DEMO-{uuid4().hex[:12].upper()}",
+            description="Demo request completion reward (10 credits per medicine unit)",
+        ))
+    previous_status = request.status
+    request.status = "COMPLETED"
+    request.completedAt = now
+    assignment = db.scalar(select(PickupAssignment).where(
+        PickupAssignment.returnId == request.returnId
+    ).order_by(PickupAssignment.assignedAt.desc()).with_for_update())
+    if assignment is not None and assignment.status.upper() not in {"CANCELLED", "COMPLETED"}:
+        assignment.status = "COMPLETED"
+        assignment.completedAt = now
+    db.add(ReturnStatusHistory(
+        returnId=request.returnId, previousStatus=previous_status, newStatus="COMPLETED",
+        changedBy=None, changeReason="Demo pickup simulation completed",
+    ))
+    db.add(Notification(
+        userId=request.userId, notificationType="DEMO_REQUEST_COMPLETED",
+        title="Demo return completed",
+        message=f"Your demo return is complete. {total_credits:.0f} MediCredits were added ({total_units} medicine units × 10 credits).",
+        relatedReturnId=request.returnId, isRead=False,
+    ))
+    db.commit()
+    return {"returnId": str(request.returnId), "status": "COMPLETED",
+            "medicineUnits": total_units,
+            "creditsAwarded": str(total_credits if existing_credit is None else existing_credit.amount),
+            "alreadyCompleted": False}
+
+
 @app.get("/api/returns")
 def list_returns(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return db.scalars(select(ReturnRequest).where(ReturnRequest.userId == user.userId).order_by(ReturnRequest.createdAt.desc())).all()
+    requests = db.scalars(select(ReturnRequest).where(
+        ReturnRequest.userId == user.userId
+    ).order_by(ReturnRequest.createdAt.desc())).all()
+    # The customer page polls this endpoint while open; expired demo timers are
+    # finalized here, so completion survives Streamlit reruns and API restarts.
+    for request in requests:
+        if (request.requestNotes or "").startswith("[DEMO REQUEST]") and request.status.upper() not in {"COMPLETED", "CANCELLED", "REJECTED"}:
+            locked = db.scalar(select(ReturnRequest).where(
+                ReturnRequest.returnId == request.returnId
+            ).with_for_update())
+            if locked is not None:
+                _complete_demo_return(db, locked, force=False)
+    return db.scalars(select(ReturnRequest).where(
+        ReturnRequest.userId == user.userId
+    ).order_by(ReturnRequest.createdAt.desc())).all()
+
+
+@app.post("/api/returns/{return_id}/demo-complete")
+def complete_demo_return_now(return_id: UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    request = db.scalar(select(ReturnRequest).where(
+        ReturnRequest.returnId == return_id
+    ).with_for_update())
+    if request is None or request.userId != user.userId:
+        raise HTTPException(status_code=404, detail="Demo return request not found")
+    return _complete_demo_return(db, request, force=True)
 
 
 @app.get("/api/returns/{return_id}")
