@@ -191,6 +191,23 @@ hr { border-color:#e2ece7 !important; }
   }
 }
 
+
+/* ---- Shop typography and branded visual cards ---- */
+.mc-shop-hero {
+  position:relative; overflow:hidden; margin:0 0 1.35rem; padding:30px 34px;
+  border:1px solid #d7e9e0; border-radius:22px;
+  background:radial-gradient(circle at 88% 10%,rgba(76,196,151,.20),transparent 26%),
+             linear-gradient(115deg,#ffffff 0%,#eef8f2 62%,#e5f4ed 100%);
+  box-shadow:0 12px 32px rgba(20,59,53,.07);
+}
+.mc-shop-eyebrow { color:#13866f; font-size:.69rem; font-weight:800; letter-spacing:.16em; }
+.mc-shop-hero h1 { margin:.45rem 0 .5rem; font-size:clamp(1.8rem,3.2vw,2.65rem); line-height:1.12; }
+.mc-shop-hero p { max-width:690px; color:#617a72; font-size:1rem; line-height:1.7; margin-bottom:1rem; }
+.mc-shop-trust { display:flex; flex-wrap:wrap; gap:9px; }
+.mc-shop-trust span { border:1px solid #d3e8dd; background:rgba(255,255,255,.72); border-radius:30px; padding:6px 11px; color:#277461; font-size:.75rem; font-weight:700; }
+.mc-shop-partner { color:#13866f; font-size:.82rem; font-weight:800; letter-spacing:.04em; margin-top:-5px; }
+.mc-shop-hero h1, [data-testid="stVerticalBlockBorderWrapper"] h3 { letter-spacing:-.045em; }
+
 </style>""", unsafe_allow_html=True)
 
 # ---------------------------- API client ----------------------------
@@ -999,9 +1016,18 @@ def customer_wallet():
             st.info('Your wallet activity will appear here.')
 
 def customer_shop():
-    """Render the simulated MediCycle coupon shop and the customer's issued coupons."""
-    st.title("MediCycle Shop")
-    st.caption("Exchange MediCredits for simulated pharmacy-app discount coupons.")
+    """Render the simulated MediCycle coupon shop with branded pharmacy imagery."""
+    st.markdown(
+        """
+        <section class="mc-shop-hero">
+          <div class="mc-shop-eyebrow">MEDICYCLE REWARDS STORE</div>
+          <h1>Good choices. Better rewards.</h1>
+          <p>Use your MediCredits to unlock simulated pharmacy-app coupons and keep your medicine journey moving responsibly.</p>
+          <div class="mc-shop-trust"><span>✦ Earn credits</span><span>✦ Redeem rewards</span><span>✦ Track every coupon</span></div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
     st.warning(
         "Demo mode: these are internal test vouchers, not valid Tata 1mg or PharmEasy promo codes. "
         "No real discount is applied to purchases."
@@ -1012,18 +1038,34 @@ def customer_shop():
     rewards = api("GET", "/api/rewards") or []
     issued = api("GET", "/api/my-reward-redemptions") or []
 
-    shop_tab, coupons_tab = st.tabs(["🛍️ Coupon shop", "🎟️ My coupons"])
+    shop_tab, coupons_tab = st.tabs(["Coupon shop", "My coupons"])
     with shop_tab:
         if balance is not None:
             st.metric("Available MediCredits", f"{balance:,.0f} MC")
+        partner_filter = st.selectbox(
+            "Pharmacy app",
+            ["All apps", "Tata 1mg", "PharmEasy"],
+            key="shop_partner_filter",
+        )
+
+        # Brand artwork is presentation-only; reward data and redemption API stay unchanged.
+        partners = {
+            "Tata 1mg": {
+                "image": "https://dmlib.airindia.com/adobe/assets/urn%3Aaaid%3Aaem%3A8013b25a-37b8-48f5-82aa-b2777ee691be/as/1mg-about.webp",
+                "alt": "Tata 1mg medicine and healthcare app artwork",
+                "class": "mc-shop-brand-tata",
+                "subtitle": "Your everyday health essentials",
+            },
+            "PharmEasy": {
+                "image": "https://static.wixstatic.com/media/7831a0_6bf395e55eb943849a604f63ea5456a9~mv2.png/v1/fill/w_384%2Ch_384%2Cal_c/25.png",
+                "alt": "PharmEasy brand logo",
+                "class": "mc-shop-brand-pharmeasy",
+                "subtitle": "Healthcare, made a little easier",
+            },
+        }
         if not rewards:
             st.info("No demo coupons are available yet. The shop catalogue may need to be seeded.")
         else:
-            partner_filter = st.selectbox(
-                "Pharmacy app",
-                ["All apps", "Tata 1mg", "PharmEasy"],
-                key="shop_partner_filter",
-            )
             visible = [
                 item for item in rewards
                 if partner_filter == "All apps" or item.get("partnerName") == partner_filter
@@ -1031,47 +1073,65 @@ def customer_shop():
             for reward in visible:
                 cost = float(reward.get("creditsRequired") or 0)
                 affordable = balance is not None and balance >= cost
+                partner = reward.get("partnerName") or "Pharmacy app"
+                artwork = partners.get(partner)
                 with st.container(border=True):
-                    left, right = st.columns([3, 1], vertical_alignment="center")
-                    with left:
-                        st.markdown(f"**{reward.get('title', 'Demo coupon')}**")
-                        st.caption(reward.get("partnerName", "Pharmacy app"))
-                    with right:
-                        st.metric("Cost", f"{cost:,.0f} MC")
-                    st.write(reward.get("description") or "Simulated demo coupon.")
-                    if balance is not None and not affordable:
-                        st.caption(f"You need {cost - balance:,.0f} more MediCredits.")
-                    if st.button(
-                        "Redeem coupon",
-                        key=f"shop_redeem_{reward.get('rewardId')}",
-                        disabled=not affordable,
-                        type="primary" if affordable else "secondary",
-                        use_container_width=True,
-                    ):
-                        result = api(
-                            "POST",
-                            "/api/reward-redemptions",
-                            data={"rewardId": reward.get("rewardId")},
-                        )
-                        if result:
-                            redemption = result.get("redemption", {})
-                            st.session_state["shop_redeem_notice"] = (
-                                f"Demo coupon issued: {redemption.get('redemptionCode', '—')} · "
-                                f"{result.get('remainingBalance', '—')} MediCredits remaining."
+                    if artwork:
+                        image_col, details_col = st.columns([1.05, 2.95], gap="large", vertical_alignment="center")
+                        with image_col:
+                            st.image(artwork["image"], caption=None, use_container_width=True)
+                        with details_col:
+                            st.markdown(f"### {reward.get('title', 'Demo coupon')}")
+                            st.markdown(f'<div class="mc-shop-partner">{partner}</div>', unsafe_allow_html=True)
+                            st.caption(artwork["subtitle"])
+                    else:
+                        st.markdown(f"### {reward.get('title', 'Demo coupon')}")
+                        st.caption(partner)
+                    cost_col, redeem_col = st.columns([1, 2], vertical_alignment="center")
+                    with cost_col:
+                        st.metric("Coupon cost", f"{cost:,.0f} MC")
+                    with redeem_col:
+                        st.write(reward.get("description") or "Simulated demo coupon.")
+                        if balance is not None and not affordable:
+                            st.caption(f"You need {cost - balance:,.0f} more MediCredits.")
+                        if st.button(
+                            "Redeem coupon",
+                            key=f"shop_redeem_{reward.get('rewardId')}",
+                            disabled=not affordable,
+                            type="primary" if affordable else "secondary",
+                            use_container_width=True,
+                        ):
+                            result = api(
+                                "POST",
+                                "/api/reward-redemptions",
+                                data={"rewardId": reward.get("rewardId")},
                             )
-                            st.rerun()
+                            if result:
+                                redemption = result.get("redemption", {})
+                                st.session_state["shop_redeem_notice"] = (
+                                    f"Demo coupon issued: {redemption.get('redemptionCode', '—')} · "
+                                    f"{result.get('remainingBalance', '—')} MediCredits remaining."
+                                )
+                                st.rerun()
 
     with coupons_tab:
         if issued:
             for coupon in issued:
                 with st.container(border=True):
-                    st.markdown(f"**{coupon.get('title', 'Demo coupon')}**")
-                    st.caption(f"{coupon.get('partnerName', 'Pharmacy app')} · {coupon.get('status', 'ISSUED')}")
-                    st.code(coupon.get("redemptionCode", ""), language=None)
-                    st.caption(
-                        f"Redeemed for {float(coupon.get('creditsUsed') or 0):,.0f} MediCredits"
-                    )
-                    st.caption("Internal demo code only — not accepted by the pharmacy app.")
+                    partner = coupon.get("partnerName") or "Pharmacy app"
+                    artwork = partners.get(partner)
+                    image_col, details_col = st.columns([1, 3], gap="large", vertical_alignment="center")
+                    with image_col:
+                        if artwork:
+                            st.image(artwork["image"], use_container_width=True)
+                    with details_col:
+                        st.markdown(f"### {coupon.get('title', 'Demo coupon')}")
+                        st.caption(f"{partner} · {coupon.get('status', 'ISSUED')}")
+                        st.code(coupon.get("redemptionCode", ""), language=None)
+                        st.caption(
+                            f"Redeemed for {float(coupon.get('creditsUsed') or 0):,.0f} MediCredits"
+                        )
+                        st.caption("Internal demo code only — not accepted by the pharmacy app.")
         else:
             st.info("Your redeemed coupons will appear here.")
 
