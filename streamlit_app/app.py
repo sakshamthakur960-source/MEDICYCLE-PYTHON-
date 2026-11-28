@@ -625,10 +625,16 @@ def customer_returns():
 
     with tab_history:
         history = api("GET", "/api/returns") or []
-        if not history:
-            st.info("You have not submitted any return requests yet.")
+        # Cancelled requests remain in the database for audit/history, but are hidden
+        # from the customer's active Return History list.
+        visible_history = [
+            record for record in history
+            if str(record.get("status") or "SUBMITTED").upper() != "CANCELLED"
+        ]
+        if not visible_history:
+            st.info("You have no active return requests.")
         else:
-            for index, record in enumerate(history):
+            for index, record in enumerate(visible_history):
                 status_value = str(record.get("status") or "SUBMITTED").upper()
                 status_labels = {
                     "VERIFIED": "Verified",
@@ -641,12 +647,11 @@ def customer_returns():
                     "RECEIVED": "Received by facility",
                     "COMPLETED": "Completed",
                     "SUBMITTED": "Submitted",
-                    "CANCELLED": "Cancelled",
                 }
                 method_label = "Doorstep pickup" if record.get("returnMethod") == "DOORSTEP_PICKUP" else "Facility drop-off"
                 with st.container(border=True):
                     left, right = st.columns([3, 1])
-                    left.markdown(f"**Return request {len(history) - index}**")
+                    left.markdown(f"**Return request {len(visible_history) - index}**")
                     left.caption(method_label)
                     left.write(f"Status: **{status_labels.get(status_value, status_value.replace('_', ' ').title())}**")
                     created = record.get("createdAt")
