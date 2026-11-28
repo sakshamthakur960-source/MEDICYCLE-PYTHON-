@@ -45,8 +45,8 @@ def test_demo_shop_coupons_are_listed_for_both_pharmacy_apps(client, db):
     response = client.get("/api/rewards", headers=headers)
     assert response.status_code == 200
     offers = {(row["partnerName"], row["creditsRequired"]) for row in response.json()}
-    assert ("Tata 1mg", "100.00") in offers
-    assert ("PharmEasy", "100.00") in offers
+    assert ("Tata 1mg", 100.0) in offers
+    assert ("PharmEasy", 100.0) in offers
 
 
 def test_customer_can_view_only_their_issued_demo_coupons(client, db):
