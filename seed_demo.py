@@ -189,21 +189,31 @@ def seed_reference_data(db: Session) -> dict[str, int]:
             ))
             added["PickupSlot"] += 1
 
-    # 3. Fictional driver and vehicle identifiers; no real phone/registration.
-    driver = db.scalar(select(models.Driver).where(models.Driver.phone == DEMO_DRIVER_PHONE))
-    if driver is None:
-        driver = models.Driver(
-            fullName="MediCycle Demo Courier",
-            phone=DEMO_DRIVER_PHONE,
-            verificationStatus="VERIFIED",
-            availabilityStatus="AVAILABLE",
-            licenseNumber="DEMO-LICENSE-001",
-            licenseExpiry=None,
-            userId=None,
-        )
-        db.add(driver)
-        db.flush()
-        added["Driver"] += 1
+    # 3. Three fictional demo drivers. The DEMO-LICENSE prefix is the
+    # explicit pool marker used by the assignment service to isolate demo jobs.
+    demo_drivers = [
+        ("MediCycle Demo Courier 1", "DEMO-DRIVER-001", "DEMO-LICENSE-001"),
+        ("MediCycle Demo Courier 2", "DEMO-DRIVER-002", "DEMO-LICENSE-002"),
+        ("MediCycle Demo Courier 3", "DEMO-DRIVER-003", "DEMO-LICENSE-003"),
+    ]
+    driver = None
+    for full_name, phone, license_number in demo_drivers:
+        row = db.scalar(select(models.Driver).where(models.Driver.phone == phone))
+        if row is None:
+            row = models.Driver(
+                fullName=full_name,
+                phone=phone,  # synthetic identifier, deliberately not a phone number
+                verificationStatus="VERIFIED",
+                availabilityStatus="AVAILABLE",
+                licenseNumber=license_number,
+                licenseExpiry=None,
+                userId=None,
+            )
+            db.add(row)
+            db.flush()
+            added["Driver"] += 1
+        if phone == DEMO_DRIVER_PHONE:
+            driver = row
 
     vehicle = db.scalar(select(models.Vehicle).where(
         models.Vehicle.registrationNumber == DEMO_VEHICLE_REGISTRATION
