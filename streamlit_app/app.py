@@ -118,6 +118,79 @@ hr { border-color:#e2ece7 !important; }
  *,*::before,*::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
 }
 @media(max-width:900px){ .mc-auth-hero{min-height:300px;padding:28px;} .mc-auth-hero h2{font-size:1.65rem;} .mc-wordmark{font-size:1.7rem;} }
+
+/* ---- Motion polish: restrained, accessible micro-interactions ---- */
+@keyframes mc-page-enter {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes mc-soft-reveal {
+  from { opacity: 0; transform: translateY(9px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes mc-brand-glow {
+  0%, 100% { box-shadow: 0 9px 22px rgba(19,134,111,.18); }
+  50%      { box-shadow: 0 11px 28px rgba(19,134,111,.28); }
+}
+.main .block-container { animation: mc-page-enter .42s cubic-bezier(.2,.7,.25,1) both; }
+.mc-mark { animation: mc-brand-glow 5s ease-in-out infinite; }
+[data-testid="stMetric"],
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stExpander"],
+[data-testid="stDataFrame"] {
+  transition: transform .22s cubic-bezier(.2,.7,.25,1),
+              box-shadow .22s ease, border-color .22s ease;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {
+  transform: translateY(-2px);
+  border-color: #c9e2d7 !important;
+  box-shadow: 0 12px 30px rgba(20,59,53,.075) !important;
+}
+[data-testid="stMetric"]:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 13px 30px rgba(20,59,53,.085);
+}
+.stButton > button,
+.stFormSubmitButton > button,
+[data-testid="stDownloadButton"] > button {
+  transition: transform .18s ease, box-shadow .18s ease,
+              background-color .18s ease, border-color .18s ease;
+}
+.stButton > button:hover,
+.stFormSubmitButton > button:hover,
+[data-testid="stDownloadButton"] > button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 16px rgba(19,134,111,.12);
+}
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  transition: background-color .2s ease, color .2s ease,
+              transform .2s cubic-bezier(.2,.7,.25,1);
+}
+[data-testid="stTabs"] button[role="tab"] {
+  transition: color .18s ease, background-color .18s ease;
+}
+[data-testid="stTabs"] button[role="tab"]:hover {
+  background: rgba(19,134,111,.055);
+}
+.mc-page-intro, .mc-profile-card, .mc-auth-hero {
+  animation: mc-soft-reveal .48s cubic-bezier(.2,.7,.25,1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .main .block-container, .mc-mark, .mc-page-intro, .mc-profile-card, .mc-auth-hero {
+    animation: none !important;
+  }
+  [data-testid="stMetric"],
+  [data-testid="stVerticalBlockBorderWrapper"],
+  [data-testid="stExpander"],
+  [data-testid="stDataFrame"],
+  .stButton > button,
+  .stFormSubmitButton > button,
+  [data-testid="stDownloadButton"] > button {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
 </style>""", unsafe_allow_html=True)
 
 # ---------------------------- API client ----------------------------
