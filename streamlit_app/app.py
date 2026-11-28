@@ -481,6 +481,7 @@ def customer_medicine_apps():
             else:
                 st.info(f"No {source_label} purchases have been recorded yet. Use the form above to add prototype data.")
 
+@st.fragment(run_every="15s")
 def customer_returns():
     st.title("Medicine returns")
     st.caption("Request a safe collection for your medicines and follow its progress.")
@@ -706,6 +707,16 @@ def customer_returns():
                     created = record.get("createdAt")
                     if created:
                         left.caption(f"Submitted {str(created).replace('T', ' ')[:16]}")
+                    is_demo = str(record.get("requestNotes") or "").startswith("[DEMO REQUEST]")
+                    if is_demo and status_value not in {"COMPLETED", "CANCELLED", "REJECTED"}:
+                        left.caption("Demo simulation: auto-completes 10 minutes after submission.")
+                        if right.button("Complete demo now", key=f"complete_demo_{record.get('returnId')}", type="primary"):
+                            result = api("POST", f"/api/returns/{record.get('returnId')}/demo-complete")
+                            if result:
+                                st.success(f"Demo completed. {result.get('creditsAwarded', '0')} MediCredits awarded.")
+                                st.rerun()
+                    elif is_demo and status_value == "COMPLETED":
+                        left.caption("Demo completed · 10 credits awarded per medicine unit.")
                     if right.button("View details", key=f"view_return_{record.get('returnId')}"):
                         st.session_state["selected_return_detail"] = record.get("returnId")
                         st.rerun()
