@@ -705,13 +705,24 @@ def customer_returns():
                 st.session_state.pop("return_confirmation", None)
                 st.rerun()
 
-    # The same expired-medicine bucket is available directly from Returns.
+    # Keep the expired-medicine bucket available without pushing the return
+    # form below a long list. Customers can expand it only when they need it.
     api("POST", "/api/return-bucket/sync")
     expired_bucket = api("GET", "/api/return-bucket") or []
-    with st.container(border=True):
-        render_expired_medicine_bucket(expired_bucket, key_prefix="returns_bucket")
+    expired_count = len(expired_bucket)
+    with st.expander(
+        f"Expired medicines ready to return · {expired_count}",
+        expanded=False,
+    ):
+        if expired_bucket:
+            st.caption("Review the medicines detected as expired. Expand this section whenever you want to inspect or submit them.")
+            render_expired_medicine_bucket(expired_bucket, key_prefix="returns_bucket")
+        else:
+            st.info("No expired medicines are currently waiting in your return bucket.")
 
-    tab_new, tab_history = st.tabs(["New return", "Return history"])
+    st.markdown("### Start a return")
+    st.caption("Create a new medicine return or check the progress of an earlier request.")
+    tab_new, tab_history = st.tabs(["＋ New return", "Return history"])
     with tab_new:
         addresses = api("GET", "/api/users/me/addresses") or []
         facilities = api("GET", "/api/facilities") or []
