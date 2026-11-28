@@ -310,21 +310,25 @@ def return_tracking(return_id:UUID,db:Session=Depends(get_db),user:User=Depends(
     if assignment: logs=db.scalars(select(TrackingLog).where(TrackingLog.assignmentId==assignment.assignmentId).order_by(TrackingLog.recordedAt.desc()).limit(50)).all()
     return {"return":req,"assignment":assignment,"tracking":logs}
 
-def auto_assign_pickup(db: Session, req: ReturnRequest):
+def auto_assign_pickup(db: Session, req: ReturnRequest, demo_mode: bool = False):
     """Assign the least-loaded verified, available driver to a verified doorstep return.
 
     The caller owns the transaction. Driver rows are locked while selecting so
     concurrent return submissions do not all select the same candidate blindly.
     A vehicle is intentionally optional in the existing assignment model.
     """
-    eligible = db.scalars(
-        select(Driver)
-        .where(
-            func.lower(Driver.verificationStatus).in_(["verified", "approved", "active"]),
-            func.lower(Driver.availabilityStatus).in_(["available"]),
+    driver_query = select(Driver).where(
+        func.lower(Driver.verificationStatus).in_(["verified", "approved", "active"]),
+        func.lower(Driver.availabilityStatus).in_(["available"]),
+    )
+    if demo_mode:
+        driver_query = driver_query.where(Driver.licenseNumber.like("DEMO-LICENSE-%"))
+    else:
+        driver_query = driver_query.where(
+            or_(Driver.licenseNumber.is_(None), ~Driver.licenseNumber.like("DEMO-LICENSE-%"))
         )
-        .order_by(Driver.createdAt, Driver.driverId)
-        .with_for_update()
+    eligible = db.scalars(
+        driver_query.order_by(Driver.createdAt, Driver.driverId).with_for_update()
     ).all()
     if not eligible:
         return None, None
@@ -360,9 +364,13 @@ def auto_assign_pickup(db: Session, req: ReturnRequest):
     ))
     db.add(Notification(
         userId=req.userId,
-        notificationType="PICKUP_ASSIGNED",
-        title="Driver assigned",
-        message=f"{driver.fullName} has been assigned to collect your medicine return.",
+        notificationType="PICKUP_ASSIGNED_DEMO" if demo_mode else "PICKUP_ASSIGNED",
+        title="Demo driver assigned" if demo_mode else "Driver assigned",
+        message=(
+            f"{driver.fullName} has been assigned and is expected at your location in about 10 minutes (demo ETA)."
+            if demo_mode else
+            f"{driver.fullName} has been assigned to collect your medicine return."
+        ),
         relatedReturnId=req.returnId,
         isRead=False,
     ))
