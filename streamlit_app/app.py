@@ -433,72 +433,224 @@ def customer_medicine_apps():
                 st.info(f"No {source_label} purchases have been recorded yet. Use the form above to add prototype data.")
 
 def customer_returns():
-    st.title('Medicine returns')
-    tab_new, tab_history = st.tabs(['Create return', 'Return history'])
+    st.title("Medicine returns")
+    st.caption("Request a safe collection for your medicines and follow its progress.")
+
+    confirmation = st.session_state.get("return_confirmation")
+    if confirmation:
+        with st.container(border=True):
+            st.success("Your return request has been verified")
+            st.markdown("### Request confirmed")
+            st.write(confirmation.get("message") or "Your request passed the initial checks.")
+            c1, c2 = st.columns(2)
+            c1.metric("Medicines submitted", confirmation.get("submittedItems", 0))
+            c2.metric(
+                "Request status",
+                "Driver assigned" if confirmation.get("pickupAssigned") else (
+                    "Awaiting driver" if confirmation.get("returnMethod") == "DOORSTEP_PICKUP" else "Ready for drop-off"
+                ),
+            )
+            assignment = confirmation.get("assignment") or {}
+            if assignment.get("driverName"):
+                st.info(f"Your pickup driver is **{assignment['driverName']}**.")
+            elif confirmation.get("returnMethod") == "DOORSTEP_PICKUP":
+                st.warning("Your request is verified. We are finding an available driver and will update the assignment shortly.")
+            else:
+                st.info("Your request is verified. Please take the medicines to the facility you selected.")
+            if st.button("Create another return request", type="secondary"):
+                st.session_state.pop("return_confirmation", None)
+                st.rerun()
+
+    tab_new, tab_history = st.tabs(["New return", "Return history"])
     with tab_new:
-        addresses = api('GET', '/api/users/me/addresses') or []
-        facilities = api('GET', '/api/facilities') or []
-        slots = api('GET', '/api/pickup-slots') or []
-        medicine_catalogue = api('GET', '/api/medicines/catalogue', params={'limit': 100}) or []
-        medicine_map = {
-            f"{m.get('name')} {m.get('strength') or ''} — {m.get('dosageForm') or 'Medicine'}": m.get('medicineId')
-            for m in medicine_catalogue
-        }
-        with st.form('return_form'):
-            method = st.radio('Return method', ['DOORSTEP_PICKUP', 'PHARMACY_DROPOFF'], format_func=lambda x: 'Doorstep pickup' if x == 'DOORSTEP_PICKUP' else 'Direct facility drop-off', horizontal=True)
-            address_map = {f"{a.get('addressLine')}, {a.get('city')} ({a.get('addressId')})": a.get('addressId') for a in addresses}
-            facility_map = {f"{f.get('facilityName')} — {f.get('address')} ({f.get('facilityId')})": f.get('facilityId') for f in facilities}
-            slot_map = {f"{s.get('slotDate')} {s.get('startTime')}–{s.get('endTime')} ({s.get('pickupSlotId')})": s.get('pickupSlotId') for s in slots if str(s.get('slotStatus', '')).upper() in ('AVAILABLE', 'OPEN')}
-            address_choice = st.selectbox('Return address', list(address_map), disabled=not address_map) if address_map else None
-            facility_choice = st.selectbox('Drop-off facility', list(facility_map), disabled=not facility_map) if method == 'PHARMACY_DROPOFF' and facility_map else None
-            slot_choice = st.selectbox('Pickup slot', list(slot_map), disabled=not slot_map) if method == 'DOORSTEP_PICKUP' and slot_map else None
-            st.markdown('**Medicines in this return request**')
-            item_count = st.number_input('Number of different medicine entries', min_value=1, max_value=10, value=1, step=1)
+        addresses = api("GET", "/api/users/me/addresses") or []
+        facilities = api("GET", "/api/facilities") or []
+        slots = api("GET", "/api/pickup-slots") or []
+        medicine_catalogue = api("GET", "/api/medicines/catalogue", params={"limit": 100}) or []
+
+        st.markdown("#### 1. Choose how to return")
+        with st.form("return_form"):
+            method = st.radio(
+                "Return method",
+                ["DOORSTEP_PICKUP", "PHARMACY_DROPOFF"],
+                format_func=lambda x: "Doorstep pickup" if x == "DOORSTEP_PICKUP" else "Drop off at a facility",
+                horizontal=True,
+            )
+
+            address_map = {}
+            for index, address in enumerate(addresses, start=1):
+                label = " · ".join(
+                    part for part in [
+                        address.get("addressLabel") or f"Saved address {index}",
+                        address.get("addressLine"),
+                        address.get("city"),
+                    ] if part
+                )
+                address_map[label] = address.get("addressId")
+
+            facility_map = {}
+            for facility in facilities:
+                label = " · ".join(
+                    part for part in [facility.get("facilityName"), facility.get("address"), facility.get("city")] if part
+                )
+                facility_map[label] = facility.get("facilityId")
+
+            slot_map = {}
+            for index, slot in enumerate(slots, start=1):
+                if str(slot.get("slotStatus", "")).upper() not in ("AVAILABLE", "OPEN"):
+                    continue
+                if int(slot.get("bookedCount") or 0) >= int(slot.get("capacity") or 0):
+                    continue
+                day = str(slot.get("slotDate") or "")
+                start_time = str(slot.get("startTime") or "").split("T")[-1][:5]
+                end_time = str(slot.get("endTime") or "").split("T")[-1][:5]
+                label = f"{day} · {start_time}–{end_time}"
+                if label in slot_map:
+                    label = f"{label} · Option {index}"
+                slot_map[label] = slot.get("pickupSlotId")
+
+            address_choice = None
+            facility_choice = None
+            slot_choice = None
+            if method == "DOORSTEP_PICKUP":
+                st.markdown("#### 2. Pickup details")
+                if address_map:
+                    address_choice = st.selectbox("Pickup address", list(address_map))
+                else:
+                    st.warning("Add a saved pickup address in Profile & addresses before requesting collection.")
+                if slot_map:
+                    slot_choice = st.selectbox("Preferred pickup window", list(slot_map))
+                else:
+                    st.warning("There are currently no available pickup windows.")
+            else:
+                st.markdown("#### 2. Choose a drop-off facility")
+                if facility_map:
+                    facility_choice = st.selectbox("MediCycle facility", list(facility_map))
+                else:
+                    st.warning("No operational drop-off facilities are currently available.")
+
+            st.markdown("#### 3. Add medicines")
+            medicine_map = {}
+            for medicine in medicine_catalogue:
+                label = " ".join(
+                    part for part in [
+                        medicine.get("name"),
+                        medicine.get("strength"),
+                        medicine.get("dosageForm"),
+                    ] if part
+                )
+                medicine_map[label] = medicine.get("medicineId")
+
+            item_count = st.number_input(
+                "Number of different medicines",
+                min_value=1,
+                max_value=10,
+                value=1,
+                step=1,
+            )
             selected_items = []
             for index in range(int(item_count)):
-                st.markdown(f'**Medicine entry {index + 1}**')
+                st.markdown(f"**Medicine {index + 1}**")
                 medicine_choice = st.selectbox(
-                    'Select medicine from catalogue',
-                    ['Choose a medicine…', *medicine_map.keys()],
-                    key=f'medicine_choice_{index}',
+                    "Medicine",
+                    ["Choose a medicine"] + list(medicine_map),
+                    key=f"return_medicine_{index}",
                     disabled=not medicine_map,
-                    help='Start typing to search the catalogue.',
                 )
-                qty = st.number_input('Quantity', min_value=1, max_value=10000, value=1, key=f'medicine_qty_{index}')
-                packaging = st.selectbox('Packaging condition', ['SEALED', 'INTACT', 'DAMAGED', 'OPENED', 'UNKNOWN'], key=f'medicine_packaging_{index}')
-                selected_items.append({'medicineId': medicine_map.get(medicine_choice), 'quantity': int(qty), 'packagingCondition': packaging})
-            notes = st.text_area('Additional notes (optional)')
-            submit = st.form_submit_button('Submit return request', type='primary', use_container_width=True)
+                qty = st.number_input(
+                    "Quantity",
+                    min_value=1,
+                    max_value=10000,
+                    value=1,
+                    key=f"return_quantity_{index}",
+                )
+                packaging = st.selectbox(
+                    "Packaging condition",
+                    ["SEALED", "INTACT", "DAMAGED", "OPENED", "UNKNOWN"],
+                    format_func=lambda x: x.replace("_", " ").title(),
+                    key=f"return_packaging_{index}",
+                )
+                selected_items.append({
+                    "medicineId": medicine_map.get(medicine_choice),
+                    "quantity": int(qty),
+                    "packagingCondition": packaging,
+                })
+
+            notes = st.text_area("Additional information (optional)", placeholder="Anything the pickup driver or facility should know?")
+            submit = st.form_submit_button(
+                "Verify and submit return",
+                type="primary",
+                use_container_width=True,
+            )
+
         if submit:
-            if any(not item.get('medicineId') for item in selected_items):
-                st.error('Search and select a medicine for every entry.')
-            elif method == 'DOORSTEP_PICKUP' and (not address_choice or not slot_choice):
-                st.error('A saved address and available pickup slot are required.')
-            elif method == 'PHARMACY_DROPOFF' and not facility_choice:
-                st.error('Select an operational drop-off facility.')
+            if any(not item.get("medicineId") for item in selected_items):
+                st.error("Please select a medicine for every entry.")
+            elif method == "DOORSTEP_PICKUP" and (not address_choice or not slot_choice):
+                st.error("A saved pickup address and available pickup window are required.")
+            elif method == "PHARMACY_DROPOFF" and not facility_choice:
+                st.error("Please select an operational drop-off facility.")
             else:
                 payload = {
-                    'addressId': address_map.get(address_choice) if address_choice else None,
-                    'returnMethod': method,
-                    'pickupSlotId': slot_map.get(slot_choice) if slot_choice else None,
-                    'facilityId': facility_map.get(facility_choice) if facility_choice else None,
-                    'requestNotes': notes or None,
-                    'items': selected_items
+                    "addressId": address_map.get(address_choice) if address_choice else None,
+                    "returnMethod": method,
+                    "pickupSlotId": slot_map.get(slot_choice) if slot_choice else None,
+                    "facilityId": facility_map.get(facility_choice) if facility_choice else None,
+                    "requestNotes": notes.strip() or None,
+                    "items": selected_items,
                 }
-                result = api('POST', '/api/returns', data=payload)
+                result = api("POST", "/api/returns", data=payload)
                 if result:
-                    st.success('Return request submitted.')
-                    st.json(result)
-    with tab_history:
-        history = api('GET', '/api/returns') or []
-        records_table(history)
-        if history:
-            labels = {f"{r.get('returnId')} — {r.get('status')}": r.get('returnId') for r in history}
-            selected = st.selectbox('Inspect a return', list(labels))
-            detail = api('GET', f"/api/returns/{labels[selected]}")
-            if detail:
-                st.json(detail)
+                    st.session_state["return_confirmation"] = result
+                    st.rerun()
 
+        st.caption("Your request is checked before a driver is assigned. Final medicine inspection and MediCredits approval happen after the facility receives the return.")
+
+    with tab_history:
+        history = api("GET", "/api/returns") or []
+        if not history:
+            st.info("You have not submitted any return requests yet.")
+        else:
+            for index, record in enumerate(history):
+                status_value = str(record.get("status") or "SUBMITTED").upper()
+                status_labels = {
+                    "VERIFIED": "Verified",
+                    "ASSIGNED": "Driver assigned",
+                    "ACCEPTED": "Accepted by facility",
+                    "REJECTED": "Rejected by facility",
+                    "PICKED_UP": "Picked up",
+                    "IN_TRANSIT": "On the way",
+                    "ARRIVED": "Arrived at facility",
+                    "RECEIVED": "Received by facility",
+                    "COMPLETED": "Completed",
+                    "SUBMITTED": "Submitted",
+                }
+                method_label = "Doorstep pickup" if record.get("returnMethod") == "DOORSTEP_PICKUP" else "Facility drop-off"
+                with st.container(border=True):
+                    left, right = st.columns([3, 1])
+                    left.markdown(f"**Return request {len(history) - index}**")
+                    left.caption(method_label)
+                    left.write(f"Status: **{status_labels.get(status_value, status_value.replace('_', ' ').title())}**")
+                    created = record.get("createdAt")
+                    if created:
+                        left.caption(f"Submitted {str(created).replace('T', ' ')[:16]}")
+                    if right.button("View details", key=f"view_return_{record.get('returnId')}"):
+                        st.session_state["selected_return_detail"] = record.get("returnId")
+                        st.rerun()
+
+        selected_return_id = st.session_state.get("selected_return_detail")
+        if selected_return_id:
+            detail = api("GET", f"/api/returns/{selected_return_id}")
+            if detail:
+                st.markdown("#### Return details")
+                request = detail.get("return") or {}
+                st.write(f"**Status:** {str(request.get('status', '—')).replace('_', ' ').title()}")
+                st.write(f"**Method:** {'Doorstep pickup' if request.get('returnMethod') == 'DOORSTEP_PICKUP' else 'Facility drop-off'}")
+                for item in detail.get("items", []):
+                    st.write(f"• Medicine entry · Quantity {item.get('quantity', '—')} · Inspection {str(item.get('inspectionStatus', 'PENDING')).replace('_', ' ').title()}")
+                if st.button("Close details", key="close_return_detail"):
+                    st.session_state.pop("selected_return_detail", None)
+                    st.rerun()
 
 def customer_wallet():
     st.title('Wallet & rewards')
