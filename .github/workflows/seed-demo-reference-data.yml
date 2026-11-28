@@ -1,0 +1,87 @@
+name: Seed MediCycle demo reference data
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose dry-run first; apply commits the demo reference inserts to TiDB"
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+        default: dry-run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: medicycle-demo-reference-seed
+  cancel-in-progress: false
+
+jobs:
+  seed-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install seeder dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "SQLAlchemy>=2.0,<3.0" "PyMySQL>=1.1" "python-dotenv>=1.0"
+
+      - name: Validate TiDB configuration
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          required = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"]
+          missing = [key for key in required if not os.getenv(key)]
+          if missing:
+              print("Missing GitHub Actions secrets: " + ", ".join(missing))
+              sys.exit(1)
+          if os.environ["DB_NAME"].lower() != "medicycle":
+              print("Safety stop: DB_NAME must be medicycle.")
+              sys.exit(1)
+          if os.environ["DB_HOST"] != "gateway01.ap-northeast-1.prod.aws.tidbcloud.com":
+              print("Safety stop: DB_HOST is not the confirmed MediCycle TiDB endpoint.")
+              sys.exit(1)
+          if os.environ["DB_PORT"] != "4000":
+              print("Safety stop: DB_PORT must be 4000 for the configured TiDB endpoint.")
+              sys.exit(1)
+          print("TiDB endpoint and database name validated; credentials are present.")
+          PY
+
+      - name: Dry-run (no database changes)
+        if: inputs.mode == 'dry-run'
+        env:
+          PYTHONPATH: .
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python seed_demo.py --dry-run
+
+      - name: Apply demo reference inserts
+        if: inputs.mode == 'apply'
+        env:
+          PYTHONPATH: .
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python seed_demo.py
